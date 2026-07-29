@@ -14,7 +14,7 @@ https://packit-repos.github.io/packit-testovoe/repomap.json
 
 | Плагин | Версия | Состояние | Обновлён |
 |---|---|---|---|
-| Volume Scroll | 1.2 | release | 29.07.26 |
+| Volume Scroll | 1.3 | release | 29.07.26 |
 
 ---
 
