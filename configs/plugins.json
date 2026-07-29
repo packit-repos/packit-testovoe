@@ -4,34 +4,6 @@
   },
   "plugins": [
     {
-      "id": "volume_scroll",
-      "name": "Volume Scroll",
-      "author": "@SSmolot",
-      "version": "1.3",
-      "state": "release",
-      "icon": "Ssmolot/0",
-      "app_version": ">=12.5.1",
-      "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.3.plugin",
-      "size": "5.04 KB",
-      "hash": "583aa1d5f3ef98b402dfa7e13bfa13f6465636d8083c9adaf9cd7636c6bba143",
-      "description": "Листает чат кнопками громкости. Двойное нажатие любой кнопки громкости вкл/выкл режим. Громкость больше - чат вверх, громкость меньше - чат вниз.",
-      "deps": [
-        "test"
-      ],
-      "archived": false,
-      "closed_source": false,
-      "paid": false,
-      "release_date": "29.07.26",
-      "update_date": "29.07.26",
-      "versions": {
-        "1.2": {
-          "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.2.plugin",
-          "app_version": ">=12.5.1",
-          "size": "5.04 KB"
-        }
-      }
-    },
-    {
       "id": "exitfy",
       "name": "exitFy",
       "author": "@exteraPluginsSup",
@@ -61,6 +33,34 @@
       "paid": false,
       "release_date": "29.07.26",
       "update_date": "29.07.26"
+    },
+    {
+      "id": "volume_scroll",
+      "name": "Volume Scroll",
+      "author": "@SSmolot",
+      "version": "1.3",
+      "state": "release",
+      "icon": "Ssmolot/0",
+      "app_version": ">=12.5.1",
+      "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.3.plugin",
+      "size": "5.04 KB",
+      "hash": "583aa1d5f3ef98b402dfa7e13bfa13f6465636d8083c9adaf9cd7636c6bba143",
+      "description": "Листает чат кнопками громкости. Двойное нажатие любой кнопки громкости вкл/выкл режим. Громкость больше - чат вверх, громкость меньше - чат вниз.",
+      "deps": [
+        "test"
+      ],
+      "archived": false,
+      "closed_source": false,
+      "paid": false,
+      "release_date": "29.07.26",
+      "update_date": "29.07.26",
+      "versions": {
+        "1.2": {
+          "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.2.plugin",
+          "app_version": ">=12.5.1",
+          "size": "5.04 KB"
+        }
+      }
     }
   ]
 }
