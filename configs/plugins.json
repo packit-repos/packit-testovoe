@@ -25,11 +25,6 @@
           "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.2.plugin",
           "app_version": ">=12.5.1",
           "size": "5.04 KB"
-        },
-        "1.0": {
-          "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.0.plugin",
-          "app_version": ">=12.5.1",
-          "size": "5.04 KB"
         }
       }
     }
