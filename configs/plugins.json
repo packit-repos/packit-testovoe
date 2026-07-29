@@ -1,4 +1,7 @@
 {
+  "tags_summary": {
+    "Network": 1
+  },
   "plugins": [
     {
       "id": "volume_scroll",
@@ -27,6 +30,37 @@
           "size": "5.04 KB"
         }
       }
+    },
+    {
+      "id": "exitfy",
+      "name": "exitFy",
+      "author": "@exteraPluginsSup",
+      "version": "3.0.2",
+      "state": "release",
+      "icon": "exitFy/1",
+      "app_version": ">=12.2.10",
+      "link": "https://packit-repos.github.io/packit-testovoe/plugins/exitfy_3.0.2.plugin",
+      "size": "294.16 KB",
+      "hash": "7a077114cc1595ef4cb0e5982e0c639e3507284b621b60f0340adeb10726d942",
+      "description": "Application download speed optimization.",
+      "tags": [
+        [
+          "Network",
+          "key_avatar_background2Cyan",
+          ""
+        ]
+      ],
+      "team": [
+        [
+          "1282540315",
+          "Founder"
+        ]
+      ],
+      "archived": false,
+      "closed_source": false,
+      "paid": false,
+      "release_date": "29.07.26",
+      "update_date": "29.07.26"
     }
   ]
 }
