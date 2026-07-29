@@ -4,19 +4,26 @@
       "id": "volume_scroll",
       "name": "Volume Scroll",
       "author": "@SSmolot",
-      "version": "1.0",
+      "version": "1.2",
       "state": "release",
       "icon": "Ssmolot/0",
       "app_version": ">=12.5.1",
-      "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.0.plugin",
+      "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.2.plugin",
       "size": "5.04 KB",
-      "hash": "3d89aaed4d563daf7d4b9452df0878188945e5e9316a5032cd2cab6d7de2aeb3",
+      "hash": "d7be9fb19d6d2a8e4690a0c8d0e869b363ab5ce2cb049f74fd79ed273c767c4e",
       "description": "Листает чат кнопками громкости. Двойное нажатие любой кнопки громкости вкл/выкл режим. Громкость больше - чат вверх, громкость меньше - чат вниз.",
       "archived": false,
       "closed_source": false,
       "paid": false,
       "release_date": "29.07.26",
-      "update_date": "29.07.26"
+      "update_date": "29.07.26",
+      "versions": {
+        "1.0": {
+          "link": "https://packit-repos.github.io/packit-testovoe/plugins/volume_scroll_1.0.plugin",
+          "app_version": ">=12.5.1",
+          "size": "5.04 KB"
+        }
+      }
     }
   ]
 }
