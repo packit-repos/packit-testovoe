@@ -1,2 +1,19 @@
-# packit-testovoe
-PackIt repository: Testovoe
+# Testovoe
+
+PackIt-репозиторий, созданный и поддерживаемый ботом.
+
+## Как подключить
+
+Вставьте эту ссылку в PackIt → Репозитории → Добавить:
+
+```
+https://packit-repos.github.io/packit-testovoe/repomap.json
+```
+
+## Плагины (0)
+
+Пока пусто.
+
+---
+
+_Файлы в этом репозитории генерируются автоматически._

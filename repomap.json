@@ -1,0 +1,22 @@
+{
+  "repometa": {
+    "rm_rid": "testovoe",
+    "rm_name": "Testovoe",
+    "rm_maintainer": "@pixwet",
+    "rm_url": "https://github.com/packit-repos/packit-testovoe",
+    "rm_mid": "538695934"
+  },
+  "repomap": {
+    "plugins": "https://packit-repos.github.io/packit-testovoe/configs/plugins.json",
+    "icons": "https://packit-repos.github.io/packit-testovoe/configs/icons.json"
+  },
+  "reasons": {
+    "reasons": [
+      "Security",
+      "Quality",
+      "Copyright",
+      "Malware",
+      "Other"
+    ]
+  }
+}
