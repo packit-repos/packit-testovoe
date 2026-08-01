@@ -1,0 +1,175 @@
+"""
+Если вы при разработке своего плагина использовали готовые фрагменты кода из моего, пожалуйста,
+укажите в описании своего плагина @zwylair в качестве благодарности за вклад в разработку. Спасибо ♥
+
+If you used code snippets from my plugin in the development of your own, please credit @zwylair
+in your plugin’s description as a thank you for the contribution. Thanks ♥
+
+
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣤⣤⣤⣀⠀⠀⠀⠀⣀⣠⣤⣤⣤⣄⡀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣿⠿⠛⠛⠛⠛⠛⢿⣷⣤⣾⠿⠛⠛⠙⠛⠛⠿⠗
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣾⡿⠁⠀⠀⠀⠀⠀⠀⠀⠙⡿⠁⠀⠀⠀⢀⣤⣀⠀⠀⢀⣤⣶⡆
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⣿⣿⣿⣿⣿⣿⣿⡇
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⣿⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣸⣿⣿⣿⣿⣿⣿⣧⣄
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⣿⠀⣿⣷⣄⣀⣤⡄⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⠷
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣁⣤⣿⣿⣿⣿⣿⠃⠀⠀⠀⠀⠀⠘⠛⠛⠛⠻⣿⣿⣿⠋⠉⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠻⢿⣿⣿⣿⣿⣿⡄⠀⠀⠀⠀⠀⠀⠀⠀⢀⡀⠹⣿⡟⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⣿⠟⢙⠛⠛⠀⠀⠀⠀⠀⠀⣀⣴⡿⠓⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠈⠻⢿⣦⣄⠀⣠⣾⡿⠋⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿⠿⠋⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀
+"""
+
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from client_utils import run_on_queue, get_last_fragment
+from ui.bulletin import BulletinHelper
+
+from java import jclass
+from java.util import Locale
+from org.telegram.ui import ChatActivity
+from org.telegram.messenger import ChatObject
+
+__name__ = "QuoteReply"
+__description__ = (
+    "Send reply as a quote with a full text of the message.\n\n"
+    "> Requires **[ZwyLib](https://t.me/zwyPlugins/48)** v2.0.0 or greater!"
+)
+__icon__ = "zwyPluginsIcons/3"
+__version__ = "1.0.11"
+__id__ = "quoteReply"
+__author__ = "@zwylair"
+__min_version__ = "12.0.1"
+
+REQUIRED_ZWYLIB_VERSION = "2.0.0"
+
+try:
+    import zwylib
+
+    if (
+            not hasattr(zwylib, "is_zwylib_version_sufficient")
+            or not zwylib.is_zwylib_version_sufficient(__name__, REQUIRED_ZWYLIB_VERSION, notify=False)
+    ):
+        raise Exception("!!!")
+
+    from zwylib import SettingsManager, SettingEntry
+except Exception as _e:
+    class RecursiveMock:
+        def __call__(self, *args, **kwargs): return self
+        def __getattr__(self, _): return self
+        def __getitem__(self, _): return self
+        def __iter__(self): return iter([])
+        def __str__(self): return ""
+        def __repr__(self): return ""
+        def __bool__(self): return False
+        def __mro_entries__(self, bases): return ()
+
+    zwylib = RecursiveMock()
+    SettingEntry = RecursiveMock()
+    SettingsManager = RecursiveMock()
+
+    l = {
+        "en": {
+            "exc_text": "ZwyLib plugin required for this plugin is not found!",
+            "not_sufficient_zwylib": f"{__name__} requires {REQUIRED_ZWYLIB_VERSION}+ version of ZwyLib!",
+            "download": "Install",
+        },
+        "ru": {
+            "exc_text": "Для корректной работы требуется плагин ZwyLib!",
+            "not_sufficient_zwylib": f"Для работы {__name__} требуется {REQUIRED_ZWYLIB_VERSION}+ версия ZwyLib!",
+            "download": "Установить",
+        },
+        "uk": {
+            "exc_text": "Для коректної роботи потрібен плагін ZwyLib!",
+            "not_sufficient_zwylib": f"Для роботи {__name__} потрібна {REQUIRED_ZWYLIB_VERSION}+ версія ZwyLib!",
+            "download": "Встановити",
+        },
+    }
+    l_dict = l.get(
+        jclass("org.telegram.messenger.LocaleController").getInstance().getCurrentLocaleInfo().pluralLangCode,
+        l.get("en")
+    )
+    err_text = f"{__name__}: " + l_dict["not_sufficient_zwylib" if "!!!" in str(_e) else "exc_text"]
+
+    def force_stop():
+        BulletinHelper.show_with_button(
+            err_text, jclass("org.telegram.messenger.R").raw.error, l_dict["download"],
+            on_click=lambda: get_last_fragment().presentFragment(
+                jclass("org.telegram.ui.ChatActivity").of(-2521243181, 48)
+            )
+        )
+
+        p = jclass("com.exteragram.messenger.plugins.PluginsController").getInstance().plugins.get(__id__)
+        p.setError(jclass("java.lang.Exception")(err_text))
+        p.setEnabled(False)
+
+    class EmptyPlugin(BasePlugin):
+        pass
+
+    run_on_queue(force_stop, delay=50)
+
+locales = {
+    "en": {
+        "settings_disable_quote_in_discussion_header": "Disable quote in discussion",
+        "settings_disable_quote_in_discussion_hint": "Send reply as usual in channel comments.",
+        "exception_message": f"An exception occurred in plugin {__name__}",
+    },
+    "ru": {
+        "settings_disable_quote_in_discussion_header": "Откл. цитату в комментариях",
+        "settings_disable_quote_in_discussion_hint": "Отправляет ответ в комментариях к постам как обычно.",
+        "exception_message": f"Возникла ошибка в плагине {__name__}",
+    },
+    "uk": {
+        "settings_disable_quote_in_discussion_header": "Вимк. цитату в коментарях",
+        "settings_disable_quote_in_discussion_hint": "Відправляє відповідь в коментарях як звичайно.",
+        "exception_message": f"Виникла помилка в плагині {__name__}",
+    },
+}
+
+L = zwylib.locales_controller.generate_locale_class(locales)
+
+
+class S:
+    disable_in_discussions = SettingEntry("disable_in_discussion", True, icon="msg_discuss")
+
+
+AUTOUPDATE_CHANNEL_ID = 2521243181
+AUTOUPDATE_MSG_ID = 31
+
+logger = zwylib.build_log(__name__)
+bulletin = zwylib.build_bulletin_helper()
+
+
+class QuoteReply(BasePlugin):
+    def on_plugin_load(self):
+        zwylib.add_autoupdater_task(AUTOUPDATE_CHANNEL_ID, AUTOUPDATE_MSG_ID)
+        self.add_on_send_message_hook()
+        logger.info("Loaded.")
+
+    def on_plugin_unload(self):
+        logger.info("Unloaded.")
+
+    def create_settings(self):
+        return [
+            S.disable_in_discussions.as_switch(
+                text=L.settings_disable_quote_in_discussion_header,
+                subtext=L.settings_disable_quote_in_discussion_hint,
+            ),
+        ]
+
+    def on_send_message_hook(self, account, params):
+        try:
+            if (
+                    params.replyToMsg is None
+                    or params.replyQuote is not None
+                    or (S.disable_in_discussions.get() and ChatObject.isDiscussionGroup(account, -params.peer))
+                    or getattr(params.replyToMsg.messageOwner, "ayuDeleted", None)
+            ):
+                return HookResult()
+
+            create_quote = getattr(ChatActivity.ReplyQuote, "from")
+            params.replyQuote = create_quote(params.replyToMsg)
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+        except:
+            logger.error(L.exception_message, exc_info=True)
+            bulletin.show_error_with_copy(L.exception_message, zwylib.format_exc())
+        return HookResult()

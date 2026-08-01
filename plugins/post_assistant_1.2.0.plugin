@@ -1,0 +1,651 @@
+__id__ = "post_assistant"
+__name__ = "Post Assistant"
+__description__ = "Assistant in creating posts."
+__icon__ = "immortal05_09/1"
+__version__ = "1.2.0"
+__author__ = "@kelynnq | @kelynplugins"
+__min_version__ = "11.12.0"
+
+from datetime import datetime
+import os
+import json
+import time
+import uuid
+import random
+
+from base_plugin import BasePlugin, HookResult, HookStrategy, MenuItemData, MenuItemType
+from android_utils import log, run_on_ui_thread
+from org.telegram.messenger import LocaleController, MessageObject, ApplicationLoader
+from typing import Any, List, Dict, Optional
+from ui.settings import Header, Switch, Divider, Selector, Input, Text
+from client_utils import get_messages_controller, get_last_fragment
+from hook_utils import set_private_field, get_private_field, find_class
+from file_utils import get_cache_dir, ensure_dir_exists, read_file, write_file
+from com.exteragram.messenger.plugins import PluginsController
+from com.exteragram.messenger.plugins.ui import PluginSettingsActivity
+from ui.bulletin import BulletinHelper
+from markdown_utils import parse_markdown
+from java.util import ArrayList
+from org.telegram.tgnet import TLRPC
+
+PRESETS_FILE = "templates.json"
+
+locales = {
+	"ru":{
+		"test":"Тест",
+		"author":"Автор :)",
+		"my_channel":"Мой канал",
+		"main":"Основные настройки",
+		"templates":"Шаблоны",
+		"template":"Шаблон",
+		"template_settings":"Настройки шаблона",
+		"template_name":"Имя шаблона",
+		"template_text":"Текст шаблона",
+		"template_add":"Создать шаблон",
+		"template_default":"Текст по умолчанию",
+		"delete":"Удалить",
+		"save":"Сохранить",
+		"other":"Прочее",
+		"markdown_help":"Помощь по Markdown",
+		"plugin_help":"Как пользоваться?",
+		"template_clear":"Очистить шаблоны",
+		"args_separator":"Разделитель аргументов",
+		"enable_markdown":"Включить Markdown",
+		"assistant_command":"Комманда Ассистента",
+		"bulletin_template_used":"Использован шаблон:",
+		"bulletin_template_clear":"Шаблоны очищены",
+		"bulletin_template_name_already_used":"Это имя уже занято",
+		"bulletin_template_name_is_command":"Это имя занято коммандой",
+		"bold":"Жирный",
+		"italic":"Курсив",
+		"strike":"Зачёренутый",
+		"spoiler":"Спойлер",
+		"inline":"Моноширный",
+		"code":"Код",
+		"url":"Ссылка",
+		"quote":"Цитата",
+		"quote_help":"Если нужна закрытая цитата то вместо '<q1>' в начале используйте '<q0>' или '<q>'",
+		"info_template_create":"Создание шаблона",
+		"info_template_create_guide":"В настройках плагина создайте шаблон\nВведите удобное вам имя шаблона\nВ текст шаблона добавьте {0}, {1}, {2}... и т.д.\n\n{0} - Это переменная. Может повторяться несколько раз",
+		"info_template_usage":"Использование шаблона",
+		"info_template_usage_guide":"Пример: .ps имя_шаблона аргумент1\n\nКол-во аргументов в комманде зависит от кол-ва переменных в шаблоне",
+		"info_template_author_help":"Если всё еще ничего не понятно вы можете обратится за помощью к автору @kelynnq или попросить в комментариях под постом.\nВидео гайд: https://t.me/c/3477937021/237",
+		"error":"Ошибка",
+		"import_error_reply":"Ошибка: Это не ответ на сообщение",
+		"found_error":"Шаблон не найден",
+		"success":"Успешно",
+		"already_been":"Уже были",
+		"import_complete":"Импорт завершен",
+		"template_vars_guide":"Специальные переменные",
+		"template_vars_guide_text":"Специальные переменны заменяются на актуальные данные",
+		"template_vars_example":"Примеры специальных переменных",
+		"local_date":"Сегодняшняя дата",
+		"local_time":"Текущее время",
+		"reply_message":"Текст сообщения на которое отвечаете",
+		"random_number":"Случайно число от 1 до 10",
+		"random_id":"Случайный id",
+		"year": "Год",
+		"month":"Месяц",
+		"day":"День",
+		"day_name":"Название дня",
+		"month_name":"Название месяца"
+	},
+	"en":{
+		"test":"Test",
+		"author":"Author :)",
+		"my_channel":"My channel" ,
+		"main":"Main settings",
+		"templates":"Templates",
+		"template":"Template",
+		"template_settings":"Template settings",
+		"template_name":"Template name",
+		"template_text":"Template text",
+		"template_add":"Create template",
+		"template_default": "Default text",
+		"delete":"Delete",
+		"save":"Save",
+		"other":"Other",
+		"markdown_help":"Markdown help",
+		"plugin_help":"How to use?",
+		"template_clear":"Clear templates",
+		"args_separator": "Argument Separator",
+		"enable_markdown": "Enable Markdown",
+		"assistant_command":"Assistans command",
+		"bulletin_template_used":"Template is used:",
+		"bulletin_template_clear":"Templates are cleared",
+		"bulletin_template_name_already_used":"This name is occupied",
+		"bulletin_template_name_is_command": "This name is occupied by the command",
+		"bold":"Bold",
+		"italic":"Italic",
+		"strike":"Strike",
+		"spoiler":"Spoiler",
+		"inline":"Mono / Inline",
+		"code":"Code",
+		"url":"Url",
+		"quote":"Quote",
+		"quote_help":"If you need a collapsed quote, use '<q0>' or '<q>' instead of '<q1>' at the beginning",
+		"info_template_create":"Creating a template",
+		"info_template_create_guide":"In the plugin settings, create a template\nEnter a template name that is convenient for you\nAdd {0}, {1}, {2}... etc. to the template text\n\n{0} is a variable. Can be repeated multiple times",
+		"info_template_usage":"Template usage",
+		"info_template_usage_guide":"Example: .ps template_name argument1\n\n The number of arguments in the command depends on the number of variables in the template",
+		"info_template_author_help":"If you still don't understand anything, you can contact the author @kelynnq for help or ask in the comments below the post.\nVideo guide: https://t.me/c/3477937021/237",
+		"error":"Error",
+		"import_error_reply":"Error: There is no reply to the message",
+		"found_error":"Template not found",
+		"success":"Success",
+		"already_been":"Already been",
+		"import_complete":"Import complete",
+		"template_vars_guide":"Special variables",
+		"template_vars_guide_text":"Special variables are replaced with current data",
+		"template_vars_example":"Examples of special variables",
+		"local_date":"Today's date",
+		"local_time":"Current time",
+		"reply_message":"The text of the message you are responding to",
+		"random_number":"Random bumber from 1 to 10",
+		"random_id":"Random id",
+		"year": "Year",
+		"month":"Month",
+		"day":"Day",
+		"day_name":"Day name",
+		"month_name":"Month name"
+	}
+}
+
+
+def t(key: str) -> str:
+	is_ru = LocaleController.getInstance().getCurrentLocale().getLanguage().startswith(
+		"ru") if LocaleController else True
+	lang = "ru" if is_ru else "en"
+	return locales.get(lang, locales["en"]).get(key, key)
+def logcat(message:str) -> None:
+	log(f"[{__id__}] {message}")
+	
+class PostAssistantPlugin(BasePlugin):
+	def on_plugin_load(self)->None:
+		self.add_on_send_message_hook()
+		self.data_path = os.path.join(ApplicationLoader.applicationContext.getFilesDir().getAbsolutePath(), "templates_data.json")
+		if not os.path.exists(self.data_path):
+			with open(self.data_path, "w", encoding="utf-8") as f:
+				json.dump(self.get_default_templates(), f, ensure_ascii=False)
+		self.templates = self.load_templates()
+		self.add_menu_item(
+            MenuItemData(
+                menu_type=MenuItemType.CHAT_ACTION_MENU,
+                text="Post Assistant",
+                icon="etg_settings",
+                on_click= lambda view: self._open_plugin_settings()
+            )
+        )
+
+	def _open_plugin_settings(self):
+		try:
+			run_on_ui_thread(lambda: self._open_settings_activity())
+		except Exception as e:
+			logcat(f"Error opening plugin settings: {e}")
+			
+	def _open_settings_activity(self):
+	 	try:
+	 		PluginsController.getInstance().plugins.get(self.id)
+	 		get_last_fragment().presentFragment(PluginSettingsActivity(PluginsController.getInstance().plugins.get(self.id)))
+	 	except Exception as e:
+	 		logcat(f"Error presenting settings activity: {e}")
+
+	def create_settings(self) -> List[Any]:
+		try:
+			items = []
+			items.append(Header(text=t("author")))
+			items.append(
+				Text(
+					text=t("my_channel"),
+					icon="msg_contacts_solar",
+					on_click=lambda view: self.open_channel("kelynplugins")
+				)
+			)
+			items.append(Header(text=t("main")))
+			items.append(
+				Switch(
+					key="enable_markdown",
+					text=t("enable_markdown"),
+					icon="notifications_settings",
+					default=True
+				)
+			)
+			items.append(
+				Input(
+					key="assistant_command",
+					text=t("assistant_command"),
+					default=".ps",
+					icon="msg_settings"
+				)
+			)
+			items.append(
+				Input(
+					key="separator",
+					text=t("args_separator"),
+					default="|",
+					icon="msg_settings"
+				)
+			)
+			items.append(Header(text=t("templates")))
+			items.append(
+				Text(
+					text=t("template_add"),
+					icon="msg_topic_create_remix",
+					on_click=lambda view: self.add_new()
+				)
+			)
+			items.append(
+				Text(
+					text=t("template_clear"),
+					icon="msg_clear",
+					on_click=lambda view: self.clear_templates()
+				)
+			)
+			for template_id in self.templates:
+				template_name = self.templates[template_id]["name"]
+				items.append(
+					Text(
+						text=f"{t('template')} {template_name}",
+						icon="msg_settings",
+						create_sub_fragment=self.open_template_setting(template_id)
+					)
+				)
+			items.append(Header(text=t("other")))
+			items.append(
+				Text(
+					text=t("plugin_help"),
+					icon="msg2_help",
+					create_sub_fragment=self.open_plugin_help
+				)
+			)
+			items.append(
+				Text(
+					text=t("markdown_help"),
+					icon="msg2_help",
+					create_sub_fragment=self.open_markdown_help
+				)
+			)
+			items.append(
+				Text(
+					text=t("template_vars_guide"),
+					icon="msg2_help",
+					create_sub_fragment=self.open_vars_help
+				)
+			)
+			return items
+		except Exception as e:
+			logcat(f"Error: {e}")
+			return [Text(text="reload", on_click=lambda view: self.reload_settings())]
+
+	def on_send_message_hook(self, account: int, params: Any) -> HookResult:
+		if hasattr(params, "caption") and isinstance(params.caption, str):
+			message = params.caption.strip()
+		elif hasattr(params, "message") and isinstance(params.message, str):
+			message = params.message.strip()
+		else:
+			return HookResult()
+		command = self.get_setting("assistant_command", ".ps")
+		if not message.startswith(command):
+			return HookResult()
+		cmd_parts = message[len(command):].strip().split()
+		if not cmd_parts:
+			return HookResult()
+		try:
+			cmd_type = cmd_parts[0]
+			args = cmd_parts[1:]
+			logcat(cmd_type)
+			new_entities = ArrayList()
+			#EXPORT
+			if cmd_type == "export":
+				if args:
+					text = self.export_template(args[0])
+				else:
+					text = self.export_templates()
+				if not text:
+					BulletinHelper.show_error(t("found_error"))
+					return HookResult(strategy = HookStrategy.CANCEL)
+				quote_entity = TLRPC.TL_messageEntityBlockquote()
+				quote_entity.collapsed = True
+				quote_entity.offset = 0
+				quote_entity.length = int(len(text.encode(encoding='utf_16_le')))
+				new_entities.add(quote_entity)
+				params.entities = new_entities
+				params = self.set_text(params, text)
+				return HookResult(strategy=HookStrategy.MODIFY_FINAL, params=params)
+			elif cmd_type == "import":
+				self.import_template(params)
+				return HookResult(strategy=HookStrategy.CANCEL)
+			#PRESET HOOK
+			for template_id in self.templates:
+				template = self.templates[template_id]
+				if cmd_type == template["name"]:
+					separator = self.get_setting("separator", "|")
+					args = message[len(command):].replace("\n", "/n").strip().split()
+					args = (" ".join(args[1:])).split(separator)
+					new_args = []
+					for _ in args:
+						new_args.append(_.replace("/n", "\n"))
+					text = self.replace_var(template["text"], params).format(*new_args)
+					is_markdown = self.get_setting("enable_markdown", True)
+
+					if is_markdown:
+						new_entities = ArrayList()
+						clean_text, quotes = self.search_quote(text)
+						caption = parse_markdown(clean_text)
+						for quote_info in quotes:
+							quote_text = quote_info["text"]
+							quote_caption = parse_markdown(quote_text)
+							clean_quote_text = quote_caption.text
+							quote_start = caption.text.find(clean_quote_text)
+							if quote_start != -1:
+								quote_entity = TLRPC.TL_messageEntityBlockquote()
+								quote_entity.collapsed = quote_info["collapsed"]
+								quote_entity.offset = len(caption.text[:quote_start].encode("utf-16-le")) // 2
+								quote_entity.length = int(len(clean_quote_text.encode(encoding='utf_16_le'))) // 2
+								new_entities.add(quote_entity)
+						if caption.entities:
+							for i in caption.entities:
+								entity = i.to_tlrpc_object()
+								new_entities.add(entity)
+						params.entities = new_entities
+						params = self.set_text(params, caption.text)
+					else:
+						params = self.set_text(params, text)
+					logcat(f"Template hooked -> {template['name']}")
+					BulletinHelper.show_info(f"{t('bulletin_template_used')} {template['name']}")
+					return HookResult(strategy=HookStrategy.MODIFY_FINAL, params=params)
+			return HookResult()
+		except Exception as e:
+			logcat(f"Error in parse: {e}")
+			return HookResult()
+
+
+	def search_quote(self, message:str):
+		try:
+			clean_text = ""
+			quotes = []
+			i = 0
+			while i < len(message):
+				found_tag = False
+				if i+3 < len(message) and message[i:i+3] == "<q>":
+					tag_len = 3
+					i += tag_len
+					collapsed = False
+					found_tag = True
+				elif i+4<len(message) and message[i:i+4] in ["<q1>", "<q0>"]:
+					tag_len = 4
+					collapsed = (message[i:i+4] == "<q1>")
+					i += tag_len
+					found_tag = True
+
+				if found_tag:
+					close_pos = message.find("</q>", i)
+					if close_pos == -1:
+						logcat("Close tag not found")
+						clean_text += message[i-tag_len:i]
+						continue
+					quote_text = message[i:close_pos]
+					quotes.append({
+						"text":quote_text,
+						"collapsed":collapsed,
+						"clean_start":int(len(clean_text.encode(encoding='utf_16_le')))
+					})
+					clean_text += quote_text
+					i = close_pos + 4
+				else:
+					clean_text += message[i]
+					i += 1
+			return clean_text, quotes
+		except Exception as e:
+			logcat(f"Error in quote search: {e}")
+
+	def replace_var(self, message:str, params: Any):
+		try:
+			now = datetime.now()
+			text = message.replace("{time}", str(datetime.now().strftime("%H:%M:%S")))
+			text = text.replace("{date}", str(now.strftime("%D")))
+			text = text.replace("{year}", str(now.year))
+			text = text.replace("{month}", str(now.month))
+			text = text.replace("{day}", str(now.day))
+			text = text.replace("{month_name}", str(now.strftime("%B")))
+			text = text.replace("{day_name}", str(now.strftime("%A")))
+			text = text.replace("{random_number}", str(random.randint(1,10)))
+			text = text.replace("{random_id}", str(uuid.uuid4())[:8])
+			if not hasattr(params, "replyToMsg") and not isinstance(params.replyToMsg, str) and not params.replyToMsg:
+				reply_msg = "None"
+			else:
+				reply_message: MessageObject = params.replyToMsg
+				if not reply_message:
+					reply_msg = "None"
+				else:
+					reply_msg = reply_message.messageOwner.message
+			text = text.replace("{reply_message}", reply_msg)
+			return text
+		except Exception as e:
+			return f"Error: {e}"
+
+	def set_text(self, params:Any, message:str):
+		if hasattr(params, "caption") and isinstance(params.caption, str):
+			params.caption = message
+		elif hasattr(params, "message") and isinstance(params.message, str):
+			params.message = message
+		return params
+		
+	def open_channel(self, channel:str):
+	   run_on_ui_thread(lambda:get_messages_controller().openByUserName(channel, get_last_fragment(), 1))
+
+	def add_new(self):
+		pname = f"template{len(self.templates)+1}"
+		text = t("template_default")
+		template_id = str(uuid.uuid4())[:8]
+		self.templates[template_id] = {
+			"name":pname,
+			"text":text
+		}
+		self.set_setting(f"template_name_{template_id}", pname)
+		self.set_setting(f"template_text_{template_id}",text)
+		self.save_templates()
+		self.reload_settings()
+		logcat(f"New presset {template_id}")
+		
+	def del_template(self, template_id):
+		fragment = get_last_fragment()
+		if fragment:
+			fragment.finishFragment()
+		del self.templates[template_id]
+		self.save_templates()
+		self.reload_settings()
+		logcat(f"{template_id} deleted")
+		
+	def open_markdown_help(self) -> List[Any]:
+		return [
+			Header(text = "Markdown types"),
+			Text(text=f"*{t('bold')}*"),
+			Text(text=f"_{t('italic')}_"),
+			Text(text=f"~{t('strike')}~"),
+			Text(text=f"||{t('spoiler')}||"),
+			Text(text=f"`{t('inline')}`"),
+			Text(text=f"[{t('url')}](https://google.com)"),
+			Text(text=f"``` print(\"{t('code')}\") ```"),
+			Text(text=f"<q1>{t('quote')}</q>"),
+			Divider(text=t("quote_help"))
+		]
+
+	def open_plugin_help(self) -> List[Any]:
+		return[
+			Header(text = t("info_template_create")),
+			Divider(text=t("info_template_create_guide")),
+			Header(text = t("info_template_usage")),
+			Divider(text = t("info_template_usage_guide")),
+			Divider(text = t("info_template_author_help"))
+		]
+	def open_vars_help(self) -> List[Any]:
+		return[
+			Header(text = t("template_vars_guide")),
+			Divider(text=t("template_vars_guide_text")),
+			Header(text = t("template_vars_example")),
+			Divider(text = "{reply_message} - " + t("reply_message")),
+			Divider(text="{random_number} - " + t("random_number")),
+			Divider(text="{random_id} - " + t("random_id")),
+			Divider(text = "{time} - " + t("local_time")),
+			Divider(text = "{date} - " + t("local_date")),
+			Divider(text = "{year} - " +t("year")),
+			Divider(text = "{month} - "+t("month")),
+			Divider(text="{month_name} - "+t("month_name")),
+			Divider(text="{day} - "+t("day")),
+			Divider(text="{day_name} - "+t("day_name"))
+		]
+
+	def open_template_setting(self, template_id:str)->List[Any]:
+		def create_elements():
+			template = self.templates[template_id]
+			template_name = template["name"]
+			template_text=template["text"]
+			return[
+				Header(text=f"{t('template_settings')} - {template_name}"),
+				Input(
+					key = f"template_name_{template_id}",
+					text = t("template_name"),
+					default = template_name,
+					icon="menu_tag_rename",
+					on_change = lambda view: self.update_templates(template_id)
+				),
+				Input(
+					key = f"template_text_{template_id}",
+					default =template_text,
+					text=t("template_text"),
+					icon="msg_filled_data_messages",
+					on_change=lambda view: self.update_templates(template_id)
+				),
+				Text(
+					text = t("delete"),
+					icon = "menu_delete_old",
+					accent = True,
+					on_click = lambda view: self.del_template(template_id)
+				),
+				Divider(text = f"Template ID: {template_id}")
+			]
+		return create_elements
+
+	def export_templates(self)->str:
+		try:
+			return json.dumps(self.templates, ensure_ascii=False, indent=2)
+		except Exception as e:
+			logcat("Error: {e}")
+			return f"Error: {e}"
+	
+	def export_template(self, name:str) -> str:
+		try:
+			for pid, template in self.templates.items():
+				if template["name"] == name:
+					result = {
+						pid : template
+					}
+					return json.dumps(result, ensure_ascii=False, indent=2)
+			return
+		except Exception as e:
+			logcat(f"Error: {e}")
+			return f"Error: {e}"
+
+	def import_template(self, params:Any):
+		try:
+			if not hasattr(params, "replyToMsg") and not isinstance(params.replyToMsg, str) and not params.replyToMsg:
+				BulletinHelper.show_error(t("import_error_reply"))
+			reply_message: MessageObject = params.replyToMsg
+			message = reply_message.messageOwner.message
+			templates = json.loads(message)
+			success = 0
+			already_been = 0
+			for template_id in templates:
+				if template_id in self.templates:
+					already_been+=1
+					continue
+				else:
+					name = templates[template_id]["name"]
+					text = templates[template_id]["text"]
+					self.templates[template_id] = {
+						"name": name,
+						"text": text
+					}
+					self.set_setting(f"template_name_{template_id}", name)
+					self.set_setting(f"template_text_{template_id}", text)
+					self.save_templates()
+					self.reload_settings()
+					success += 1
+			BulletinHelper.show_error(f"{t('import_complete')}\n{t('success')}:{success} | {t('already_been')}:{already_been}")
+		except Exception as e:
+			logcat(f"Error: {e}")
+			BulletinHelper.show_error(f"{t('error')}: {e}")
+
+	def update_templates(self, template_id):
+		try:
+			template = self.templates[template_id]
+			template_name = template["name"]
+			new_name_key = f"template_name_{template_id}"
+			new_text_key = f"template_text_{template_id}"
+			new_name = self.get_setting(new_name_key, template_name)
+			new_text = self.get_setting(new_text_key, "")
+			commands = ["export", "import"]
+			if new_name in commands:
+				self.templates[template_id]["text"] = new_text
+				self.save_templates()
+				self.reload_settings()
+				BulletinHelper.show_error(t("bulletin_template_name_is_command"))
+				self.set_setting(new_name_key, self.templates[template_id]["name"])
+				return
+			for temp_id in self.templates:
+				if temp_id != template_id:
+					name = self.templates[temp_id]["name"]
+					if new_name == name:
+						self.templates[template_id]["text"] = new_text
+						self.save_templates()
+						self.reload_settings()
+						BulletinHelper.show_error(t("bulletin_template_name_already_used"))
+						self.set_setting(new_name_key, self.templates[template_id]["name"])
+						return 
+			self.templates[template_id]["name"] = new_name
+			self.templates[template_id]["text"] = new_text
+			self.save_templates()
+			self.reload_settings()
+		except Exception as e:
+			logcat(f"Error: {e}")
+			
+	def reload_settings(self):
+		try:
+			PluginsController.getInstance().loadPluginSettings(self.id)
+		except Exception as e:
+				logcat(f"Error: {e}")
+				
+	def get_default_templates(self):
+		template_id = str(uuid.uuid4())[:8]
+		return {
+			template_id: {
+				"name": "test",
+				"text": "👋Hello, {0}.\nHow are u?\n<q1>by @kelynplugins</q>"
+			}
+		}
+
+	def clear_templates(self):
+		self.templates = {}
+		self.save_templates()
+		self.reload_settings()
+		BulletinHelper.show_info(t('bulletin_template_clear'))
+		
+	def load_templates(self):
+		try:
+			with open(self.data_path, "r", encoding="utf-8") as f:
+				logcat("Data has loaded")
+				return json.load(f)
+		except Exception as e:
+			logcat(f"Error loading: {e}")
+			data = self.get_default_templates()
+			logcat("Data loaded as default")
+			return data
+
+	def save_templates(self):
+	   try:
+	   	with open(self.data_path, "w", encoding="utf-8") as f:
+	   		json.dump(self.templates, f, ensure_ascii=False)
+	   	logcat("Templates has saved")
+	   except Exception as e:
+	   	logcat(f"Error: {e}")

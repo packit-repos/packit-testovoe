@@ -1,0 +1,213 @@
+import traceback
+
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class
+from java.lang import Float, Boolean
+from ui.settings import Header, Divider, Text, Input, Switch
+from ui.bulletin import BulletinHelper
+from android_utils import run_on_ui_thread
+
+__name__ = "Square Liquid Glass"
+__description__ = "Reduces the corner radius of blurred backgrounds by half."
+__version__ = "1.0.0"
+__author__ = "@immat0x1 little bit edited with square settings by @la_cringe"
+__id__ = "square_liquid_glass"
+
+
+class SmallerBlurRadii(BasePlugin):
+    class ReduceRadiusHook(MethodHook):
+        def __init__(self, plugin) -> None:
+            self.plugin = plugin
+
+        def before_hooked_method(self, param):
+            try:
+                args_count = len(param.args)
+                mode = self.plugin.get_setting("radius_mode", "multiplier")
+
+                if mode == "multiplier":
+                    multiplier = float(self.plugin.get_setting("radius_multiplier", "0.5"))
+                    if args_count == 1:
+                        param.args[0] = Float(param.args[0] * multiplier)
+                    elif args_count >= 4:
+                        for i in range(4):
+                            param.args[i] = Float(param.args[i] * multiplier)
+                
+                elif mode == "fixed":
+                    fixed_value = float(self.plugin.get_setting("fixed_radius", "0.0"))
+                    if args_count == 1:
+                        param.args[0] = Float(fixed_value)
+                    elif args_count >= 4:
+                        for i in range(4):
+                            param.args[i] = Float(fixed_value)
+                
+                elif mode == "individual":
+                    if args_count == 1:
+                        radius = float(self.plugin.get_setting("radius_all", "0.0"))
+                        param.args[0] = Float(radius)
+                    elif args_count >= 4:
+                        radii = [
+                            float(self.plugin.get_setting("radius_top_left", "0.0")),
+                            float(self.plugin.get_setting("radius_top_right", "0.0")),
+                            float(self.plugin.get_setting("radius_bottom_right", "0.0")),
+                            float(self.plugin.get_setting("radius_bottom_left", "0.0"))
+                        ]
+                        for i in range(4):
+                            param.args[i] = Float(radii[i])
+
+            except Exception as e:
+                self.plugin.log(f"{e}\n{traceback.format_exc()}")
+
+    def on_plugin_load(self):
+        try:
+            drawable_cls = find_class("org.telegram.ui.Components.blur3.drawable.BlurredBackgroundDrawable").getClass()
+
+            if not drawable_cls:
+                self.log("BlurredBackgroundDrawable class not found.")
+                return
+
+            hook = self.ReduceRadiusHook(self)
+
+            method_single = drawable_cls.getDeclaredMethod(
+                "setRadius",
+                Float.TYPE
+            )
+            self.hook_method(method_single, hook)
+
+            method_quad = drawable_cls.getDeclaredMethod(
+                "setRadius",
+                Float.TYPE, Float.TYPE, Float.TYPE, Float.TYPE
+            )
+            self.hook_method(method_quad, hook)
+
+            method_penta = drawable_cls.getDeclaredMethod(
+                "setRadius",
+                Float.TYPE, Float.TYPE, Float.TYPE, Float.TYPE, Boolean.TYPE
+            )
+            self.hook_method(method_penta, hook)
+
+            self.log("Plugin loaded successfully")
+
+        except Exception as e:
+            self.log(f"Failed to activate radius hook: {e}\n{traceback.format_exc()}")
+
+    def create_settings(self):
+        settings = [
+            Header(text="Основные настройки"),
+            Text(
+                text="Режим настройки",
+                icon="msg_edit",
+                on_click=lambda view: self._show_mode_selector()
+            ),
+            Divider()
+        ]
+
+        mode = self.get_setting("radius_mode", "multiplier")
+
+        if mode == "multiplier":
+            settings.extend([
+                Header(text="Настройки множителя"),
+                Input(
+                    key="radius_multiplier",
+                    text="Множитель радиуса",
+                    subtext="0.0 = квадрат, 0.5 = половина, 1.0 = оригинал, 2.0 = двойной",
+                    default="0.5",
+                    icon="msg_speed",
+                    on_change=lambda value: self._on_setting_change("radius_multiplier", value)
+                )
+            ])
+
+        elif mode == "fixed":
+            settings.extend([
+                Header(text="Фиксированное значение"),
+                Input(
+                    key="fixed_radius",
+                    text="Радиус в пикселях",
+                    subtext="Установите точное значение радиуса (0-100 пикселей)",
+                    default="0.0",
+                    icon="msg_radius",
+                    on_change=lambda value: self._on_setting_change("fixed_radius", value)
+                )
+            ])
+
+        elif mode == "individual":
+            settings.extend([
+                Header(text="Индивидуальные углы"),
+                Input(
+                    key="radius_all",
+                    text="Все углы (для одиночного метода)",
+                    subtext="Радиус для всех углов когда используется единое значение",
+                    default="0.0",
+                    icon="msg_radius",
+                    on_change=lambda value: self._on_setting_change("radius_all", value)
+                ),
+                Input(
+                    key="radius_top_left",
+                    text="Верхний левый угол",
+                    default="0.0",
+                    icon="msg_corner_top_left",
+                    on_change=lambda value: self._on_setting_change("radius_top_left", value)
+                ),
+                Input(
+                    key="radius_top_right",
+                    text="Верхний правый угол",
+                    default="0.0",
+                    icon="msg_corner_top_right",
+                    on_change=lambda value: self._on_setting_change("radius_top_right", value)
+                ),
+                Input(
+                    key="radius_bottom_right",
+                    text="Нижний правый угол",
+                    default="0.0",
+                    icon="msg_corner_bottom_right",
+                    on_change=lambda value: self._on_setting_change("radius_bottom_right", value)
+                ),
+                Input(
+                    key="radius_bottom_left",
+                    text="Нижний левый угол",
+                    default="0.0",
+                    icon="msg_corner_bottom_left",
+                    on_change=lambda value: self._on_setting_change("radius_bottom_left", value)
+                )
+            ])
+
+        return settings
+
+    def _show_mode_selector(self):
+        from ui.alert import AlertDialogBuilder
+        from client_utils import get_last_fragment
+
+        fragment = get_last_fragment()
+        if not fragment or not fragment.getParentActivity():
+            return
+
+        context = fragment.getParentActivity()
+        builder = AlertDialogBuilder(context)
+        
+        modes = ["Множитель", "Фиксированное значение", "Индивидуальные углы"]
+        mode_values = ["multiplier", "fixed", "individual"]
+        current_mode = self.get_setting("radius_mode", "multiplier")
+
+        builder.set_title("Выберите режим настройки")
+        builder.set_items(
+            modes,
+            lambda dialog, which: self._on_mode_selected(mode_values[which])
+        )
+        
+        run_on_ui_thread(builder.show)
+
+    def _on_mode_selected(self, mode):
+        self.set_setting("radius_mode", mode, reload_settings=True)
+        mode_names = {
+            "multiplier": "Множитель",
+            "fixed": "Фиксированное значение",
+            "individual": "Индивидуальные углы"
+        }
+        run_on_ui_thread(lambda: BulletinHelper.show_success(f"Режим изменён на: {mode_names.get(mode, mode)}"))
+
+    def _on_setting_change(self, key, value):
+        try:
+            float(value)
+            self.set_setting(key, value, reload_settings=False)
+            self.log(f"Настройка '{key}' изменена на: {value}")
+        except ValueError:
+            run_on_ui_thread(lambda: BulletinHelper.show_error("Введите корректное числовое значение"))

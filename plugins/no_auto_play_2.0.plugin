@@ -1,0 +1,252 @@
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class
+from ui.settings import Header, Switch
+
+
+__id__ = "no_auto_play"
+__name__ = "No Auto Play"
+__description__ = "Disables automatic playback of the next voice message, video message, or track."
+__author__ = "@kvucoPlugins"
+__version__ = "2.0"
+__icon__ = "EKCTEPArAM/28"
+__app_version__ = ">=12.5.1"
+
+
+def _is_java_true(value):
+    return value is True or str(value).lower() == "true"
+
+
+class CleanupPlayerHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        try:
+            if (
+                len(param.args) >= 3
+                and _is_java_true(param.args[2])
+                and self.plugin.should_stop_voice_autoplay(param.thisObject)
+            ):
+                if len(param.args) >= 2:
+                    param.args[1] = True
+                param.args[2] = False
+        except Exception as e:
+            self.plugin.log(f"cleanupPlayer hook failed: {e}")
+
+
+class AutoNextHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        try:
+            if not param.args or not _is_java_true(param.args[0]):
+                return
+            if not self.plugin.should_stop_track_autoplay():
+                return
+
+            param.setResult(None)
+            try:
+                param.thisObject.cleanupPlayer(True, True)
+            except Exception as cleanup_error:
+                self.plugin.log(f"auto-next cleanup failed: {cleanup_error}")
+        except Exception as e:
+            self.plugin.log(f"playNextMessageWithoutOrder hook failed: {e}")
+
+
+class NoAutoPlay(BasePlugin):
+    MEDIA_CONTROLLER_CLASS = "org.telegram.messenger.MediaController"
+    SETTING_STOP_TRACK_AUTOPLAY = "stop_track_autoplay"
+    SETTING_STOP_VOICE_AUTOPLAY = "stop_voice_autoplay"
+    SETTING_STOP_SEPARATED_VOICE_ONLY = "stop_separated_voice_only"
+
+    def __init__(self):
+        super().__init__()
+        self.unhook_objects = []
+        self.private_fields = {}
+
+    def is_voice_autoplay_stop_enabled(self):
+        return _is_java_true(self.get_setting(self.SETTING_STOP_VOICE_AUTOPLAY, True))
+
+    def on_stop_voice_autoplay_changed(self, value):
+        try:
+            self.set_setting(self.SETTING_STOP_VOICE_AUTOPLAY, value, reload_settings=True)
+        except Exception as e:
+            self.log(f"voice setting update failed: {e}")
+
+    def _create_stop_voice_switch(self):
+        return Switch(
+            key=self.SETTING_STOP_VOICE_AUTOPLAY,
+            text="Stop voice/video messages",
+            default=True,
+            subtext="Stops the next voice message or round video after playback.",
+            on_change=self.on_stop_voice_autoplay_changed,
+        )
+
+    def create_settings(self):
+        settings = [
+            Header("Playback"),
+            Switch(
+                key=self.SETTING_STOP_TRACK_AUTOPLAY,
+                text="Stop track autoplay",
+                default=True,
+                subtext="Stops the next music track when the current one ends.",
+            ),
+            self._create_stop_voice_switch(),
+        ]
+
+        if self.is_voice_autoplay_stop_enabled():
+            settings.append(
+                Switch(
+                    key=self.SETTING_STOP_SEPARATED_VOICE_ONLY,
+                    text="Only separated voice/video messages",
+                    default=False,
+                    subtext="Allows adjacent voice messages and round videos, stops when another message is between them.",
+                )
+            )
+
+        return settings
+
+    def on_plugin_load(self):
+        self.on_plugin_unload()
+
+        try:
+            media_controller = find_class(self.MEDIA_CONTROLLER_CLASS)
+        except Exception as e:
+            self.log(f"Class lookup failed: {e}")
+            return
+
+        if media_controller is None:
+            self.log(f"Class not found: {self.MEDIA_CONTROLLER_CLASS}")
+            return
+
+        self._hook_cleanup_player(media_controller)
+        self._hook_auto_next(media_controller)
+
+    def on_plugin_unload(self):
+        for unhook in list(self.unhook_objects):
+            try:
+                self.unhook_method(unhook)
+            except Exception as e:
+                self.log(f"unhook failed: {e}")
+        self.unhook_objects.clear()
+        self.private_fields.clear()
+
+    def _hook_cleanup_player(self, media_controller):
+        try:
+            unhooks = self.hook_all_methods(
+                media_controller,
+                "cleanupPlayer",
+                CleanupPlayerHook(self),
+            )
+            self._register_hooks(unhooks, "cleanupPlayer")
+        except Exception as e:
+            self.log(f"Failed to hook cleanupPlayer: {e}")
+
+    def _hook_auto_next(self, media_controller):
+        try:
+            unhooks = self.hook_all_methods(
+                media_controller,
+                "playNextMessageWithoutOrder",
+                AutoNextHook(self),
+            )
+            self._register_hooks(unhooks, "playNextMessageWithoutOrder")
+        except Exception as e:
+            self.log(f"Failed to hook playNextMessageWithoutOrder: {e}")
+
+    def _register_hooks(self, unhooks, name):
+        if not unhooks:
+            self.log(f"Hook returned no cleanup handles: {name}")
+            return
+        try:
+            unhook_list = list(unhooks)
+        except TypeError:
+            unhook_list = [unhooks]
+        for unhook in unhook_list:
+            if unhook is not None:
+                self.unhook_objects.append(unhook)
+
+    def should_stop_track_autoplay(self):
+        return _is_java_true(self.get_setting(self.SETTING_STOP_TRACK_AUTOPLAY, True))
+
+    def should_stop_voice_autoplay(self, media_controller):
+        if not self.is_voice_autoplay_stop_enabled():
+            return False
+        current_message = self._get_current_voice_or_round_message(media_controller)
+        if current_message is None:
+            return False
+        if not _is_java_true(self.get_setting(self.SETTING_STOP_SEPARATED_VOICE_ONLY, False)):
+            return True
+        return self._has_separated_next_voice_message(media_controller, current_message)
+
+    def _get_current_voice_or_round_message(self, media_controller):
+        try:
+            current_message = self._get_private_field_silent(media_controller, "playingMessageObject")
+            if current_message is None:
+                return None
+            if current_message.isVoice() or current_message.isRoundVideo():
+                return current_message
+        except Exception:
+            pass
+        return None
+
+    def _has_separated_next_voice_message(self, media_controller, current_message):
+        try:
+            playlist = self._get_private_field_silent(media_controller, "voiceMessagesPlaylist")
+            if playlist is None:
+                return True
+
+            index = playlist.indexOf(current_message)
+            if index < 0:
+                return True
+
+            next_index = index + 1
+            if next_index >= playlist.size():
+                return True
+
+            next_message = playlist.get(next_index)
+            if next_message is None:
+                return True
+
+            if current_message.getDialogId() != next_message.getDialogId():
+                return True
+
+            return abs(current_message.getId() - next_message.getId()) > 1
+        except Exception:
+            return True
+
+    def _get_private_field_silent(self, obj, field_name):
+        if obj is None:
+            return None
+
+        try:
+            cls = obj.getClass()
+        except Exception:
+            cls = None
+
+        cache_key = self._private_field_cache_key(cls, field_name)
+        field = self.private_fields.get(cache_key)
+        if field is not None:
+            try:
+                return field.get(obj)
+            except Exception:
+                self.private_fields.pop(cache_key, None)
+
+        while cls is not None:
+            try:
+                field = cls.getDeclaredField(field_name)
+                field.setAccessible(True)
+                self.private_fields[cache_key] = field
+                return field.get(obj)
+            except Exception:
+                try:
+                    cls = cls.getSuperclass()
+                except Exception:
+                    cls = None
+        return None
+
+    def _private_field_cache_key(self, cls, field_name):
+        try:
+            return f"{cls.getName()}#{field_name}"
+        except Exception:
+            return field_name

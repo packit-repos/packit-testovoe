@@ -1,0 +1,159 @@
+from android_utils import run_on_ui_thread
+from base_plugin import BasePlugin, MethodHook
+from hook_utils import find_class
+from ui.settings import Switch, Input, Header, Divider
+
+__id__ = "VidMsgBtnOfst"
+__name__ = "Смещение кнопок в кружках"
+__description__ = "Позволяет перемещать кнопки вспышки и смены камеры в видеосообщениях"
+__author__ = "@Vernyak6"
+__version__ = "1.1.2"
+__icon__ = "icqkolobki/11"
+__min_version__ = "11.12.0"
+
+TAG_FIXED = 0x7A9B1C
+
+
+class CameraButtonsRightPlugin(BasePlugin):
+    def on_plugin_load(self):
+        InstantCameraView = find_class("org.telegram.ui.Components.InstantCameraView")
+        if not InstantCameraView:
+            return
+        plugin = self
+
+        class CtorHook(MethodHook):
+            def after_hooked_method(self, param):
+                run_on_ui_thread(lambda: plugin._fix(param.thisObject), 300)
+
+        ctors = InstantCameraView.getClass().getDeclaredConstructors()
+        for ctor in ctors:
+            ctor.setAccessible(True)
+            self.hook_method(ctor, CtorHook())
+
+    def create_settings(self):
+        return [
+            Header(text="Расположение"),
+            Switch(
+                key="invert",
+                text="Инвертировать кнопки",
+                default=False,
+                subtext="Вспышка справа, камера слева"
+            ),
+            Header(text="Смещение"),
+            Input(
+                key="offset_x",
+                text="Смещение по X (dp)",
+                default="499",
+                subtext="Отступ от правого края"
+            ),
+            Input(
+                key="offset_y",
+                text="Смещение по Y (dp)",
+                default="0",
+                subtext="Отступ от нижнего края"
+            ),
+            Header(text="Размер"),
+            Input(
+                key="scale",
+                text="Масштаб кнопок (%)",
+                default="100",
+                subtext="100 — оригинальный размер"
+            ),
+            Header(text="Прозрачность"),
+            Input(
+                key="alpha",
+                text="Прозрачность кнопок (%)",
+                default="100",
+                subtext="100 — полностью видимые, 0 — невидимые"
+            ),
+            Header(text="Убрать кнопки"),
+            Switch(
+                key="hide_flash",
+                text="Убрать кнопку вспышки",
+                default=False
+            ),
+            Switch(
+                key="hide_camera",
+                text="Убрать кнопку смены камеры",
+                default=False
+            ),
+            Divider(text="Изменения применяются после перезапуска приложения"),
+        ]
+
+    def _fix(self, view):
+        try:
+            if view.getTag(TAG_FIXED):
+                return
+
+            dp = self._dp(view)
+
+            invert = self.get_setting("invert", False)
+            hide_flash = self.get_setting("hide_flash", False)
+            hide_camera = self.get_setting("hide_camera", False)
+            try:
+                offset_x = int(self.get_setting("offset_x", "499"))
+            except Exception:
+                offset_x = 499
+            try:
+                offset_y = int(self.get_setting("offset_y", "0"))
+            except Exception:
+                offset_y = 0
+            try:
+                scale = float(self.get_setting("scale", "100")) / 100.0
+            except Exception:
+                scale = 1.0
+            try:
+                alpha = int(float(self.get_setting("alpha", "100")) / 100.0 * 255)
+            except Exception:
+                alpha = 255
+
+            for i in range(view.getChildCount()):
+                child = view.getChildAt(i)
+                try:
+                    lp = child.getLayoutParams()
+                    if lp is None:
+                        continue
+                    if lp.gravity == 83 and child.getChildCount() == 2:
+                        btn0 = child.getChildAt(0)
+                        btn1 = child.getChildAt(1)
+                        child.removeAllViews()
+
+                        if hide_flash:
+                            btn1.setVisibility(4)
+                        if hide_camera:
+                            btn0.setVisibility(4)
+
+                        if alpha < 255:
+                            child.setAlpha(alpha / 255.0)
+
+                        if invert:
+                            child.addView(btn0)
+                            child.addView(btn1)
+                        else:
+                            child.addView(btn1)
+                            child.addView(btn0)
+
+                        if scale != 1.0:
+                            child.setScaleX(scale)
+                            child.setScaleY(scale)
+
+                        lp.gravity = 85
+                        lp.rightMargin = dp(offset_x)
+                        lp.bottomMargin = dp(offset_y)
+                        lp.leftMargin = 0
+                        child.setLayoutParams(lp)
+                        child.requestLayout()
+                        break
+                except Exception:
+                    pass
+
+            view.setTag(TAG_FIXED, True)
+        except Exception:
+            pass
+
+    def _dp(self, view):
+        try:
+            density = view.getContext().getResources().getDisplayMetrics().density
+            return lambda x: int(x * density + 0.5)
+        except Exception:
+            return lambda x: x * 3

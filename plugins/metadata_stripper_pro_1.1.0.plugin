@@ -1,0 +1,283 @@
+import os
+import shutil
+import uuid
+import zipfile
+from typing import Any, Dict, Iterable, Optional, Set
+
+from PIL import Image
+from android.media import ExifInterface
+from android.widget import Toast
+from org.telegram.messenger import ApplicationLoader
+
+from android_utils import log, run_on_ui_thread
+from base_plugin import BasePlugin, HookResult, HookStrategy
+
+__id__ = "metadata_stripper_pro"
+__name__ = "Metadata Stripper"
+__description__ = "Removes metadata from photos, videos, and document files before sending."
+__author__ = "@QefozizPlug"
+__version__ = "1.1.0"
+__icon__ = "exteraPlugins/1"
+__min_version__ = "11.12.0"
+
+IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "heic", "heif"}
+OPENXML_EXTENSIONS = {
+    "docx", "docm", "dotx", "dotm",
+    "xlsx", "xlsm", "xltx", "xltm",
+    "pptx", "pptm", "potx", "potm",
+}
+ODF_EXTENSIONS = {"odt", "ott", "ods", "ots", "odp", "otp", "odg", "otg", "odf"}
+
+DIRECT_PATH_FIELDS = {
+    "path",
+    "imagePath",
+    "videoPath",
+    "documentPath",
+    "filePath",
+    "audioPath",
+    "attachPath",
+}
+COLLECTION_FIELDS = {
+    "photoPathsArray",
+    "videoPathsArray",
+    "documentPathsArray",
+    "mediaPathsArray",
+    "paths",
+}
+INNER_MEDIA_FIELDS = {"path", "imagePath", "videoPath", "filePath", "documentPath", "audioPath"}
+
+EXIF_TAGS_TO_CLEAR = [
+    ExifInterface.TAG_GPS_LATITUDE,
+    ExifInterface.TAG_GPS_LONGITUDE,
+    ExifInterface.TAG_GPS_ALTITUDE,
+    ExifInterface.TAG_GPS_LATITUDE_REF,
+    ExifInterface.TAG_GPS_LONGITUDE_REF,
+    ExifInterface.TAG_GPS_DATESTAMP,
+    ExifInterface.TAG_GPS_TIMESTAMP,
+    ExifInterface.TAG_DATETIME,
+    ExifInterface.TAG_DATETIME_ORIGINAL,
+    ExifInterface.TAG_DATETIME_DIGITIZED,
+    ExifInterface.TAG_MAKE,
+    ExifInterface.TAG_MODEL,
+    ExifInterface.TAG_SOFTWARE,
+    ExifInterface.TAG_ARTIST,
+    ExifInterface.TAG_COPYRIGHT,
+    ExifInterface.TAG_IMAGE_DESCRIPTION,
+    ExifInterface.TAG_USER_COMMENT,
+]
+
+
+def _copy_without_fs_metadata(input_path: str, output_path: str) -> None:
+    with open(input_path, "rb") as src, open(output_path, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+
+
+def _strip_image_metadata(input_path: str, output_path: str) -> None:
+    with Image.open(input_path) as img:
+        image_to_save = img
+        fmt = img.format
+        if fmt == "JPEG" and img.mode not in {"RGB", "L"}:
+            image_to_save = img.convert("RGB")
+        image_to_save.save(output_path, format=fmt)
+
+
+def _strip_zip_document_metadata(input_path: str, output_path: str, ext: str) -> None:
+    remove_names = set()
+    if ext in OPENXML_EXTENSIONS:
+        remove_names.update({"docProps/core.xml", "docProps/app.xml", "docProps/custom.xml"})
+    if ext in ODF_EXTENSIONS:
+        remove_names.add("meta.xml")
+
+    with zipfile.ZipFile(input_path, "r") as zin, zipfile.ZipFile(output_path, "w") as zout:
+        for item in zin.infolist():
+            if item.filename in remove_names:
+                continue
+
+            data = zin.read(item.filename)
+            clean_info = zipfile.ZipInfo(item.filename, date_time=(1980, 1, 1, 0, 0, 0))
+            clean_info.compress_type = item.compress_type
+            clean_info.external_attr = item.external_attr
+            clean_info.internal_attr = item.internal_attr
+            clean_info.create_system = item.create_system
+            clean_info.extra = b""
+            clean_info.comment = b""
+            zout.writestr(clean_info, data)
+
+
+def _try_clear_exif_metadata(path: str) -> None:
+    try:
+        exif = ExifInterface(path)
+        changed = False
+        for tag in EXIF_TAGS_TO_CLEAR:
+            if exif.getAttribute(tag) is not None:
+                exif.setAttribute(tag, None)
+                changed = True
+        if changed:
+            exif.saveAttributes()
+    except Exception:
+        # Not all formats support ExifInterface.
+        pass
+
+
+def clean_media_file(input_path: str, output_path: str) -> bool:
+    try:
+        ext = os.path.splitext(input_path)[1].lower().lstrip(".")
+
+        if ext in IMAGE_EXTENSIONS:
+            _strip_image_metadata(input_path, output_path)
+        elif ext in OPENXML_EXTENSIONS or ext in ODF_EXTENSIONS:
+            _strip_zip_document_metadata(input_path, output_path, ext)
+        else:
+            _copy_without_fs_metadata(input_path, output_path)
+
+        _try_clear_exif_metadata(output_path)
+        return True
+    except Exception as exc:
+        log("[metadata_stripper_pro] Failed to clean file '{0}': {1}".format(input_path, exc))
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except Exception:
+            pass
+        return False
+
+
+def _is_existing_file(path: Any) -> bool:
+    return isinstance(path, str) and bool(path) and os.path.isfile(path)
+
+
+def _set_collection_item(collection: Any, index: int, value: str) -> bool:
+    try:
+        collection[index] = value
+        return True
+    except Exception:
+        pass
+
+    try:
+        collection.set(index, value)
+        return True
+    except Exception:
+        return False
+
+
+def _iter_collection(collection: Any) -> Iterable[Any]:
+    if collection is None or isinstance(collection, (str, bytes)):
+        return []
+    try:
+        return list(collection)
+    except Exception:
+        return []
+
+
+class MetadataStripperPlugin(BasePlugin):
+    def on_plugin_load(self):
+        self.add_on_send_message_hook(priority=100)
+        self.log("MetadataStripper loaded")
+
+    def _candidate_path_fields(self, obj: Any) -> Set[str]:
+        fields = set(DIRECT_PATH_FIELDS)
+        try:
+            for name in dir(obj):
+                low = name.lower()
+                if low.endswith("path") or low.endswith("filepath"):
+                    fields.add(name)
+        except Exception:
+            pass
+        return fields
+
+    def _candidate_collection_fields(self, obj: Any) -> Set[str]:
+        fields = set(COLLECTION_FIELDS)
+        try:
+            for name in dir(obj):
+                low = name.lower()
+                if low.endswith("paths") or low.endswith("array"):
+                    fields.add(name)
+        except Exception:
+            pass
+        return fields
+
+    def on_send_message_hook(self, account: int, params: Any) -> HookResult:
+        cache_dir = ApplicationLoader.applicationContext.getCacheDir().getAbsolutePath()
+        cleaned_cache = {}  # type: Dict[str, str]
+        replaced_count = 0
+
+        def get_cleaned_path(original_path: str) -> Optional[str]:
+            if original_path in cleaned_cache:
+                cached = cleaned_cache[original_path]
+                return cached or None
+
+            ext = os.path.splitext(original_path)[1]
+            clean_name = "clean_{0}{1}".format(uuid.uuid4().hex, ext)
+            clean_path = os.path.join(cache_dir, clean_name)
+
+            if clean_media_file(original_path, clean_path):
+                cleaned_cache[original_path] = clean_path
+                return clean_path
+
+            cleaned_cache[original_path] = ""
+            return None
+
+        for field_name in self._candidate_path_fields(params):
+            try:
+                current_value = getattr(params, field_name, None)
+            except Exception:
+                continue
+
+            if not _is_existing_file(current_value):
+                continue
+
+            cleaned = get_cleaned_path(current_value)
+            if cleaned and cleaned != current_value:
+                try:
+                    setattr(params, field_name, cleaned)
+                    replaced_count += 1
+                except Exception:
+                    pass
+
+        for collection_field in self._candidate_collection_fields(params):
+            try:
+                collection = getattr(params, collection_field, None)
+            except Exception:
+                continue
+
+            if not collection:
+                continue
+
+            for index, item in enumerate(_iter_collection(collection)):
+                if _is_existing_file(item):
+                    cleaned = get_cleaned_path(item)
+                    if cleaned and cleaned != item and _set_collection_item(collection, index, cleaned):
+                        replaced_count += 1
+                    continue
+
+                for inner_field in INNER_MEDIA_FIELDS:
+                    try:
+                        inner_value = getattr(item, inner_field, None)
+                    except Exception:
+                        continue
+
+                    if not _is_existing_file(inner_value):
+                        continue
+
+                    cleaned = get_cleaned_path(inner_value)
+                    if cleaned and cleaned != inner_value:
+                        try:
+                            setattr(item, inner_field, cleaned)
+                            replaced_count += 1
+                        except Exception:
+                            pass
+
+        if replaced_count > 0:
+            self.log("Metadata stripped for {0} media path(s)".format(replaced_count))
+
+            def show_toast():
+                Toast.makeText(
+                    ApplicationLoader.applicationContext,
+                    "Metadata removed: {0}".format(replaced_count),
+                    Toast.LENGTH_SHORT,
+                ).show()
+
+            run_on_ui_thread(show_toast)
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+
+        return HookResult(strategy=HookStrategy.DEFAULT)

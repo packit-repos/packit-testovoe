@@ -1,0 +1,82 @@
+from base_plugin import BasePlugin, MethodReplacement
+from hook_utils import find_class
+
+__id__ = "no_ayu_rofls"
+__name__ = "No Ayu Rofls"
+__description__ = "Disables AyuGram joke links."
+__author__ = "@kvucoPlugins"
+__version__ = "1.2"
+__icon__ = "pk_5101869_by_Ctikerubot/3"
+__app_version__ = ">=12.5.1"
+__sdk_version__ = ">=1.4.3.3"
+
+HANDLER_CLASSES = (
+    "com.radolyn.ayugram.AyuInAppHandlers",
+    "com.radolyn.ayugram.utils.AyuInAppHandlers",
+)
+
+AYU_ROFLS_CORE_CLASS = "com.extera.plugins.ayurofls.AyuRoflsCore"
+
+HANDLER_METHODS = (
+    "handleAyuPath",
+    "handleAyu",
+    "handleXiaomi",
+    "handleNekogram",
+)
+
+
+class NoOpReplacement(MethodReplacement):
+    def replace_hooked_method(self, param):
+        return None
+
+
+class NoAyuRoflsPlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self._unhooks = []
+
+    def on_plugin_load(self):
+        self.on_plugin_unload()
+        self._disable_ayu_rofls_plugin()
+        for class_name in HANDLER_CLASSES:
+            clazz = find_class(class_name)
+            if clazz is None:
+                continue
+            for method_name in HANDLER_METHODS:
+                self._unhooks.extend(
+                    self.hook_all_methods(
+                        clazz,
+                        method_name,
+                        NoOpReplacement(),
+                        priority=10000,
+                    ) or []
+                )
+
+    def _disable_ayu_rofls_plugin(self):
+        clazz = find_class(AYU_ROFLS_CORE_CLASS)
+        if clazz is None:
+            return
+
+        try:
+            method = clazz.getDeclaredMethod("unload")
+            method.setAccessible(True)
+            method.invoke(None)
+        except Exception as exc:
+            self.log(f"AyuRoflsCore.unload failed: {exc}")
+
+        self._unhooks.extend(
+            self.hook_all_methods(
+                clazz,
+                "load",
+                NoOpReplacement(),
+                priority=10000,
+            ) or []
+        )
+
+    def on_plugin_unload(self):
+        for unhook in list(self._unhooks):
+            try:
+                self.unhook_method(unhook)
+            except Exception:
+                pass
+        self._unhooks.clear()

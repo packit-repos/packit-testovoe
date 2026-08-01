@@ -1,0 +1,525 @@
+__id__ = "asb"
+__name__ = "ASB"
+__description__ = (
+    "Always Send Button — "
+    "Управление "
+    "кнопками "
+    "отправки, "
+    "голосового "
+    "и видеосообщения. "
+    "4 режима."
+)
+__version__ = "10.0.0"
+__author__ = "@avaikaW"
+__app_version__ = ">=12.5.1"
+
+
+from typing import Any, List
+
+from base_plugin import BasePlugin, MethodHook, MethodReplacement
+from hook_utils import find_class, get_private_field, set_private_field
+from ui.settings import Header, Switch, Text, Divider
+from android_utils import run_on_ui_thread, OnLongClickListener
+from android.view import View
+
+
+ASB = "ASB"
+
+S_ALWAYS = "mode_always_send"
+S_MOD1 = "mode_mod1"
+S_NO_VIDEO = "mode_no_video"
+S_NO_AUDIO = "mode_no_audio"
+
+CLS_EV = "org.telegram.ui.Components.ChatActivityEnterView"
+
+F_SEND = "sendButton"
+F_AVC = "audioVideoButtonContainer"
+F_VM = "isInVideoMode"
+F_RP = "recordPanel"
+F_FSSB = "forceShowSendButton"
+F_ATTACH = "attachLayout"
+F_AA = "attachLayoutAlpha"
+F_APA = "attachLayoutPaddingAlpha"
+F_ATX = "attachLayoutTranslationX"
+F_APX = "attachLayoutPaddingTranslationX"
+
+_m_always = False
+_m_mod1 = False
+_m_nv = False
+_m_na = False
+_blocker = None
+_pending = set()
+_views = {}
+
+
+def _gf(obj, name):
+    try:
+        return get_private_field(obj, name)
+    except Exception:
+        return None
+
+
+def _sf(obj, name, val):
+    try:
+        set_private_field(obj, name, val)
+    except Exception:
+        pass
+
+
+def _cache_settings(plugin):
+    global _m_always, _m_mod1, _m_nv, _m_na
+    _m_always = plugin.get_setting(S_ALWAYS, False)
+    _m_mod1 = plugin.get_setting(S_MOD1, False)
+    _m_nv = plugin.get_setting(S_NO_VIDEO, False)
+    _m_na = plugin.get_setting(S_NO_AUDIO, False)
+
+
+def _get_blocker():
+    global _blocker
+    if _blocker is None:
+        _blocker = OnLongClickListener(lambda v: True)
+    return _blocker
+
+
+def _get_attach(view):
+    vid = id(view)
+    cached = _views.get(vid)
+    if cached is not None and cached[0] is not None:
+        return cached
+    al = _gf(view, F_ATTACH)
+    ab = _gf(view, "attachButton")
+    entry = (al, ab)
+    _views[vid] = entry
+    return entry
+
+
+def _restore_paperclip(view):
+    if view is None:
+        return
+    vid = id(view)
+    if vid in _pending:
+        return
+    _pending.add(vid)
+    _sf(view, F_AA, 1.0)
+    _sf(view, F_APA, 1.0)
+    _sf(view, F_ATX, 0.0)
+    _sf(view, F_APX, 0.0)
+    al, ab = _get_attach(view)
+    if al is not None:
+        al.setVisibility(View.VISIBLE)
+        al.setAlpha(1.0)
+        al.setTranslationX(0.0)
+        al.setScaleX(1.0)
+        al.setScaleY(1.0)
+    if ab is not None:
+        ab.setVisibility(View.VISIBLE)
+        ab.setAlpha(1.0)
+        ab.setTranslationX(0.0)
+        ab.setScaleX(1.0)
+        ab.setScaleY(1.0)
+
+    def _d():
+        _pending.discard(vid)
+        _sf(view, F_AA, 1.0)
+        _sf(view, F_APA, 1.0)
+        _sf(view, F_ATX, 0.0)
+        _sf(view, F_APX, 0.0)
+        if al is not None:
+            al.setAlpha(1.0)
+            al.setTranslationX(0.0)
+        if ab is not None:
+            ab.setAlpha(1.0)
+            ab.setTranslationX(0.0)
+
+    run_on_ui_thread(_d)
+
+
+def _after_vv_restore(view):
+    if _m_nv and not _m_na:
+        _sf(view, F_VM, False)
+    elif _m_na and not _m_nv:
+        _sf(view, F_VM, True)
+    if _m_always:
+        _restore_paperclip(view)
+
+
+class SetRecordVideoVisibleHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        if not _m_always and not _m_nv and not _m_na:
+            return
+        try:
+            args = param.args
+            if args is None or len(args) < 1:
+                return
+            if _m_always:
+                _sf(param.thisObject, F_FSSB, True)
+                args[0] = False
+            if _m_nv and not _m_na:
+                args[0] = False
+            elif _m_na and not _m_nv:
+                args[0] = True
+        except Exception as e:
+            self.plugin.log(f"{ASB} SetRecVid before err: {e}")
+
+    def after_hooked_method(self, param):
+        if not _m_always and not _m_nv and not _m_na:
+            return
+        try:
+            _after_vv_restore(param.thisObject)
+        except Exception as e:
+            self.plugin.log(f"{ASB} SetRecVid after err: {e}")
+
+
+class CheckSendButtonHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        if not _m_always:
+            return
+        try:
+            _sf(param.thisObject, F_FSSB, True)
+        except Exception as e:
+            self.plugin.log(f"{ASB} CheckSend before err: {e}")
+
+    def after_hooked_method(self, param):
+        if not _m_always and not _m_mod1 and not _m_nv and not _m_na:
+            return
+        try:
+            view = param.thisObject
+            if _m_mod1:
+                sb = _gf(view, F_SEND)
+                if sb is not None:
+                    sb.setOnLongClickListener(_get_blocker())
+            _after_vv_restore(view)
+        except Exception as e:
+            self.plugin.log(f"{ASB} CheckSend after err: {e}")
+
+
+class SetForceShowHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        if not _m_always:
+            return
+        try:
+            args = param.args
+            if args is not None and len(args) > 0:
+                args[0] = True
+        except Exception as e:
+            self.plugin.log(f"{ASB} ForceShow before err: {e}")
+
+    def after_hooked_method(self, param):
+        if not _m_always and not _m_nv and not _m_na:
+            return
+        try:
+            _after_vv_restore(param.thisObject)
+        except Exception as e:
+            self.plugin.log(f"{ASB} ForceShow after err: {e}")
+
+
+class OnAttachedHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        if not _m_always and not _m_mod1 and not _m_nv and not _m_na:
+            return
+        try:
+            view = param.thisObject
+            if _m_always:
+                _sf(view, F_FSSB, True)
+            if _m_mod1:
+                sb = _gf(view, F_SEND)
+                if sb is not None:
+                    sb.setOnLongClickListener(_get_blocker())
+            _after_vv_restore(view)
+        except Exception as e:
+            self.plugin.log(f"{ASB} OnAttached after err: {e}")
+
+
+class UpdateRecordBtnHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        if not _m_always and not _m_nv and not _m_na:
+            return
+        try:
+            view = param.thisObject
+            if _m_always:
+                _sf(view, F_FSSB, True)
+            _after_vv_restore(view)
+        except Exception as e:
+            self.plugin.log(f"{ASB} UpdateRecBtn after err: {e}")
+
+
+class UpdateAttachLayoutHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        if not _m_always:
+            return
+        try:
+            _restore_paperclip(param.thisObject)
+        except Exception as e:
+            self.plugin.log(f"{ASB} UpdateAttach after err: {e}")
+
+
+class ShowPopupHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        if not _m_mod1:
+            return
+        try:
+            param.setResult(None)
+        except Exception as e:
+            self.plugin.log(f"{ASB} ShowPopup err: {e}")
+
+
+class SendButtonSetVisibilityHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        if not _m_always:
+            return
+        try:
+            args = param.args
+            if args is not None and len(args) > 0 and args[0] != View.VISIBLE:
+                args[0] = View.VISIBLE
+        except Exception as e:
+            self.plugin.log(f"{ASB} SBSetVis err: {e}")
+
+
+class Plugin(BasePlugin):
+
+    def on_plugin_load(self):
+        self.log(f"{ASB} ============================")
+        self.log(f"{ASB} ASB v10.0.0 loading...")
+        self.log(f"{ASB} Author: @avaikaW")
+        self.log(f"{ASB} ============================")
+        self._unhooks = []
+        _cache_settings(self)
+        self._log_modes()
+        self._hook_enter_view()
+        self._hook_send_button_class()
+        self.log(f"{ASB} Plugin loaded")
+
+    def _log_modes(self):
+        self.log(f"{ASB} --- Mode Status ---")
+        self.log(f"{ASB}   1.AlwaysSend: {'ON' if _m_always else 'off'}")
+        self.log(f"{ASB}   2.Mod1: {'ON' if _m_mod1 else 'off'}")
+        self.log(f"{ASB}   3.NoVideo: {'ON' if _m_nv else 'off'}")
+        self.log(f"{ASB}   4.NoAudio: {'ON' if _m_na else 'off'}")
+
+    def _on_mode_change(self, _=None):
+        _cache_settings(self)
+        self._log_modes()
+
+    def _hook_enter_view(self):
+        self.log(f"{ASB} Hooking {CLS_EV}...")
+        ev = find_class(CLS_EV)
+        if ev is None:
+            self.log(f"{ASB} ERROR: {CLS_EV} not found!")
+            return
+        k = ev.getClass()
+
+        unhook_list = self.hook_all_methods(
+            k, "setRecordVideoButtonVisible", SetRecordVideoVisibleHook(self)
+        )
+        self._store(unhook_list)
+        self.log(f"{ASB}   [PRIMARY] setRecordVideoButtonVisible: {self._cnt(unhook_list)} hooks")
+
+        unhook_list = self.hook_all_methods(
+            k, "checkSendButton", CheckSendButtonHook(self)
+        )
+        self._store(unhook_list)
+        self.log(f"{ASB}   [SEC] checkSendButton: {self._cnt(unhook_list)} hooks")
+
+        unhook_list = self.hook_all_methods(
+            k, "setForceShowSendButton", SetForceShowHook(self)
+        )
+        self._store(unhook_list)
+        self.log(f"{ASB}   [SEC] setForceShowSendButton: {self._cnt(unhook_list)} hooks")
+
+        unhook_list = self.hook_all_methods(
+            k, "onAttachedToWindow", OnAttachedHook(self)
+        )
+        self._store(unhook_list)
+        self.log(f"{ASB}   [SEC] onAttachedToWindow: {self._cnt(unhook_list)} hooks")
+
+        unhook_list = self.hook_all_methods(
+            k, "updateRecordButton", UpdateRecordBtnHook(self)
+        )
+        self._store(unhook_list)
+        self.log(f"{ASB}   [SEC] updateRecordButton: {self._cnt(unhook_list)} hooks")
+
+        unhook_list = self.hook_all_methods(
+            k, "updateAttachLayoutParams", UpdateAttachLayoutHook(self)
+        )
+        self._store(unhook_list)
+        self.log(f"{ASB}   [GUARD] updateAttachLayoutParams: {self._cnt(unhook_list)} hooks")
+
+        popup_names = [
+            "showSendPopup",
+            "openSchedulePopup",
+            "showScheduleAlert",
+            "showSendMessageAlert",
+        ]
+        for name in popup_names:
+            unhook_list = self.hook_all_methods(k, name, ShowPopupHook(self))
+            self._store(unhook_list)
+            if unhook_list and len(unhook_list) > 0:
+                self.log(f"{ASB}   [SEC] {name}: {self._cnt(unhook_list)} hooks")
+
+        self.log(f"{ASB} ChatActivityEnterView done")
+
+    def _hook_send_button_class(self):
+        sb_cls_name = CLS_EV + "$SendButton"
+        self.log(f"{ASB} Hooking {sb_cls_name}...")
+        sb_cls = find_class(sb_cls_name)
+        if sb_cls is None:
+            self.log(f"{ASB} WARNING: {sb_cls_name} not found, skip guard hook")
+            return
+        k = sb_cls.getClass()
+        unhook_list = self.hook_all_methods(
+            k, "setVisibility", SendButtonSetVisibilityHook(self)
+        )
+        self._store(unhook_list)
+        self.log(f"{ASB}   [GUARD] SendButton.setVisibility: {self._cnt(unhook_list)} hooks")
+        self.log(f"{ASB} SendButton guard done")
+
+    def _store(self, unhook_list):
+        if unhook_list:
+            for u in unhook_list:
+                self._unhooks.append(u)
+
+    def _cnt(self, unhook_list):
+        return len(unhook_list) if unhook_list else 0
+
+    def on_plugin_unload(self):
+        self.log(f"{ASB} Unloading...")
+        self._unhooks.clear()
+        _pending.clear()
+        _views.clear()
+        self.log(f"{ASB} Unloaded")
+
+    def create_settings(self):
+        return [
+            Header(text="ASB — Always Send Button"),
+
+            Text(
+                text=(
+                    "Плагин "
+                    "управления "
+                    "кнопками "
+                    "отправки, "
+                    "голосового "
+                    "и видеосообщения. "
+                    "4 режима. "
+                    "v10.0.0 @avaikaW"
+                )
+            ),
+
+            Divider(),
+
+            Header(text="Основные режимы"),
+
+            Switch(
+                key=S_ALWAYS,
+                text="Always Send Button",
+                default=False,
+                subtext=(
+                    "Режим 1: "
+                    "Полностью "
+                    "убирает "
+                    "кнопку "
+                    "голосового/"
+                    "видеосообщения. "
+                    "Остаётся "
+                    "только "
+                    "кнопка "
+                    "отправки "
+                    "и скрепка. "
+                    "Приоритет "
+                    "над 3 и 4."
+                ),
+                on_change=self._on_mode_change,
+            ),
+
+            Switch(
+                key=S_MOD1,
+                text="Mod 1 — Без меню долгого нажатия",
+                default=False,
+                subtext=(
+                    "Режим 2: "
+                    "Блокирует "
+                    "меню "
+                    "расписания/"
+                    "беззвучной "
+                    "отправки "
+                    "при долгом "
+                    "нажатии "
+                    "кнопки отправки."
+                ),
+                on_change=self._on_mode_change,
+            ),
+
+            Divider(),
+
+            Header(text="Голос/видео кнопка"),
+
+            Text(
+                text=(
+                    "Кнопки "
+                    "голосового "
+                    "и видео "
+                    "объединены "
+                    "и переключаются "
+                    "кликом. "
+                    "Не совмещайте 3 и 4!"
+                )
+            ),
+
+            Switch(
+                key=S_NO_VIDEO,
+                text="No Video Message",
+                default=False,
+                subtext=(
+                    "Режим 3: "
+                    "Кнопка всегда "
+                    "в режиме "
+                    "голосового. "
+                    "Видео "
+                    "заблокировано."
+                ),
+                on_change=self._on_mode_change,
+            ),
+
+            Switch(
+                key=S_NO_AUDIO,
+                text="No Audio Message",
+                default=False,
+                subtext=(
+                    "Режим 4: "
+                    "Кнопка всегда "
+                    "в режиме "
+                    "видео. "
+                    "Голос "
+                    "заблокирован."
+                ),
+                on_change=self._on_mode_change,
+            ),
+
+            Divider(),
+
+            Text(text="ASB v10.0.0 | @avaikaW", red=True),
+        ]
