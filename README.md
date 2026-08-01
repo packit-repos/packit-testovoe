@@ -10,7 +10,7 @@ PackIt-репозиторий, созданный и поддерживаемы�
 https://packit-repos.github.io/packit-testovoe/repomap.json
 ```
 
-## Плагины (337)
+## Плагины (342)
 
 | Плагин | Версия | Состояние | Обновлён |
 |---|---|---|---|
@@ -351,6 +351,11 @@ https://packit-repos.github.io/packit-testovoe/repomap.json
 | AdminTools | 3.0.0.1 | release | 01.08.26 |
 | NoForwardLimit | 1.1.5 | release | 01.08.26 |
 | ZwyLib | 2.0.4 | release | 01.08.26 |
+| Custom Snow | 1.0.0 | release | 01.08.26 |
+| Floating Rounds | 1.0 | release | 01.08.26 |
+| Proxy Sub | 1.0.1 | release | 01.08.26 |
+| Radio Station | 4.2.3 | release | 01.08.26 |
+| Voice Changer RT | 1.0.0 | release | 01.08.26 |
 
 ---
 
