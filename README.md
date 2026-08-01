@@ -1,4 +1,4 @@
-# Testovoe
+# exteraGram Utilities
 
 PackIt-репозиторий, созданный и поддерживаемый ботом.
 
