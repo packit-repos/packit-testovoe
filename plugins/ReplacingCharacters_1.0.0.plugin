@@ -1,0 +1,764 @@
+import json
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+from android.content import ClipData, Context
+
+from android_utils import log
+from base_plugin import BasePlugin, HookResult, HookStrategy
+from client_utils import get_last_fragment
+from ui.bulletin import BulletinHelper
+from ui.settings import Divider, Header, Input, Switch, Text
+
+__id__ = "ReplacingCharacters"
+__name__ = "Replacing Characters"
+__description__ = "Автоматически применяет пользовательские правила замены текста перед отправкой сообщения."
+__author__ = "@Nikita218000"
+__version__ = "1.2 recode"
+__icon__ = "IconForPlugins_by_TgEmodziBot/5"
+__min_version__ = "11.12.0"
+
+CONFIG_STATE_SETTING_KEY = "replacement_configurations_state_v1"
+LEGACY_RULES_SETTING_KEY = "replacement_rules_list"
+LEGACY_IMPORT_BUFFER_SETTING_KEY = "import_json_field"
+
+RULE_CONTENT_KEYS = (
+    "match",
+    "original",
+    "search",
+    "find",
+    "source",
+    "replace",
+    "replacement",
+    "target",
+    "value",
+)
+
+
+class SymbolReplacerPlugin(BasePlugin):
+    def on_plugin_load(self):
+        self.add_on_send_message_hook()
+        self._normalize_state_in_settings()
+
+    def _generate_id(self, prefix: str) -> str:
+        return f"{prefix}_{time.time_ns()}"
+
+    def _default_configuration_name(self, index: int) -> str:
+        return f"Конфигурация {index + 1}"
+
+    def _configuration_name_input_key(self, configuration_id: str) -> str:
+        return f"configuration_name_{configuration_id}"
+
+    def _configuration_import_input_key(self, configuration_id: str) -> str:
+        return f"configuration_import_{configuration_id}"
+
+    def _log_error(self, message: str, error: Optional[Exception] = None):
+        if error is None:
+            log(f"[{__id__}] {message}")
+            return
+        log(f"[{__id__}] {message}: {error}")
+
+    def _coerce_bool(self, value: Any, default: bool = True) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return bool(value)
+        if value is None:
+            return default
+
+        normalized = str(value).strip().lower()
+        if normalized in ("1", "true", "yes", "on", "enabled"):
+            return True
+        if normalized in ("0", "false", "no", "off", "disabled"):
+            return False
+        return default
+
+    def _coerce_text(self, value: Any, default: str = "") -> str:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value
+        try:
+            return str(value)
+        except Exception:
+            return default
+
+    def _extract_rule_text(self, item: Dict[str, Any], keys: Tuple[str, ...], default: str = "") -> str:
+        for key in keys:
+            if key in item:
+                return self._coerce_text(item.get(key), default)
+        return default
+
+    def _normalize_rule(self, item: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, dict):
+            return None
+        if not any(key in item for key in RULE_CONTENT_KEYS):
+            return None
+
+        rule_id = self._coerce_text(item.get("id"), "").strip() or self._generate_id("rule")
+        match_text = self._extract_rule_text(item, ("match", "original", "search", "find", "source"))
+        replace_text = self._extract_rule_text(item, ("replace", "replacement", "target", "value"))
+        enabled = self._coerce_bool(item.get("enabled"), default=True)
+
+        return {
+            "id": rule_id,
+            "match": match_text,
+            "replace": replace_text,
+            "enabled": enabled,
+        }
+
+    def _looks_like_rule_list(self, items: Any) -> bool:
+        if not isinstance(items, list) or not items:
+            return False
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if any(key in item for key in ("rules", "configs", "configurations", "items", "data")):
+                return False
+            if any(key in item for key in RULE_CONTENT_KEYS):
+                return True
+
+        return False
+
+    def _normalize_rules(self, raw_rules: Any) -> List[Dict[str, Any]]:
+        if isinstance(raw_rules, str):
+            try:
+                raw_rules = json.loads(raw_rules)
+            except Exception as error:
+                self._log_error("Failed to decode rules JSON", error)
+                return []
+
+        if not isinstance(raw_rules, list):
+            return []
+
+        normalized_rules: List[Dict[str, Any]] = []
+        seen_ids = set()
+
+        for item in raw_rules:
+            normalized = self._normalize_rule(item)
+            if not normalized:
+                continue
+
+            while normalized["id"] in seen_ids:
+                normalized["id"] = self._generate_id("rule")
+
+            seen_ids.add(normalized["id"])
+            normalized_rules.append(normalized)
+
+        return normalized_rules
+
+    def _normalize_configuration(self, item: Any, index: int) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, dict):
+            return None
+
+        config_id = self._coerce_text(item.get("id"), "").strip() or self._generate_id("config")
+        raw_name = item.get("name")
+        if raw_name is None:
+            raw_name = item.get("title")
+
+        name = self._coerce_text(raw_name, "").strip() or self._default_configuration_name(index)
+
+        raw_rules = item.get("rules")
+        if raw_rules is None:
+            for key in ("items", "data"):
+                candidate = item.get(key)
+                if isinstance(candidate, list):
+                    raw_rules = candidate
+                    break
+
+        if raw_rules is None and any(key in item for key in RULE_CONTENT_KEYS):
+            raw_rules = [item]
+
+        import_buffer = item.get("import_buffer")
+        if import_buffer is None:
+            import_buffer = item.get("import_json")
+
+        return {
+            "id": config_id,
+            "name": name,
+            "rules": self._normalize_rules(raw_rules),
+            "import_buffer": self._coerce_text(import_buffer, ""),
+        }
+
+    def _create_empty_configuration(self, name: Optional[str] = None) -> Dict[str, Any]:
+        return {
+            "id": self._generate_id("config"),
+            "name": name or self._default_configuration_name(0),
+            "rules": [],
+            "import_buffer": "",
+        }
+
+    def _normalize_state(self, raw_state: Any) -> Dict[str, Any]:
+        if isinstance(raw_state, str):
+            try:
+                raw_state = json.loads(raw_state)
+            except Exception as error:
+                self._log_error("Failed to decode configurations JSON", error)
+                raw_state = None
+
+        active_configuration_id = ""
+        configuration_items: Any = []
+
+        if isinstance(raw_state, dict):
+            active_configuration_id = self._coerce_text(
+                raw_state.get("active_configuration_id") or raw_state.get("active_config_id"),
+                "",
+            ).strip()
+            configuration_items = raw_state.get("configurations")
+            if configuration_items is None:
+                configuration_items = raw_state.get("configs")
+            if configuration_items is None and isinstance(raw_state.get("rules"), list):
+                configuration_items = [raw_state]
+        elif isinstance(raw_state, list):
+            if self._looks_like_rule_list(raw_state):
+                configuration_items = [{"name": self._default_configuration_name(0), "rules": raw_state}]
+            else:
+                configuration_items = raw_state
+
+        if not isinstance(configuration_items, list):
+            configuration_items = []
+
+        normalized_configurations: List[Dict[str, Any]] = []
+        seen_ids = set()
+
+        for index, item in enumerate(configuration_items):
+            normalized = self._normalize_configuration(item, index)
+            if not normalized:
+                continue
+
+            while normalized["id"] in seen_ids:
+                normalized["id"] = self._generate_id("config")
+
+            seen_ids.add(normalized["id"])
+            normalized_configurations.append(normalized)
+
+        if not normalized_configurations:
+            normalized_configurations.append(self._create_empty_configuration(self._default_configuration_name(0)))
+
+        valid_ids = {configuration["id"] for configuration in normalized_configurations}
+        if active_configuration_id not in valid_ids:
+            active_configuration_id = normalized_configurations[0]["id"]
+
+        return {
+            "active_configuration_id": active_configuration_id,
+            "configurations": normalized_configurations,
+        }
+
+    def _build_legacy_state(self) -> Dict[str, Any]:
+        configuration = self._create_empty_configuration(self._default_configuration_name(0))
+        configuration["rules"] = self._normalize_rules(self.get_setting(LEGACY_RULES_SETTING_KEY, "[]"))
+        configuration["import_buffer"] = self._coerce_text(
+            self.get_setting(LEGACY_IMPORT_BUFFER_SETTING_KEY, ""),
+            "",
+        )
+        return {
+            "active_configuration_id": configuration["id"],
+            "configurations": [configuration],
+        }
+
+    def _get_state(self) -> Dict[str, Any]:
+        raw_state = self.get_setting(CONFIG_STATE_SETTING_KEY, None)
+        if raw_state in (None, ""):
+            return self._build_legacy_state()
+        return self._normalize_state(raw_state)
+
+    def _save_state(self, state: Any, reload_settings: bool = False) -> Dict[str, Any]:
+        normalized_state = self._normalize_state(state)
+        self.set_setting(
+            CONFIG_STATE_SETTING_KEY,
+            json.dumps(normalized_state, ensure_ascii=False),
+            reload_settings=reload_settings,
+        )
+        return normalized_state
+
+    def _normalize_state_in_settings(self):
+        self._save_state(self._get_state(), reload_settings=False)
+
+    def _get_configurations(self) -> List[Dict[str, Any]]:
+        return self._get_state().get("configurations", [])
+
+    def _get_active_configuration_id(self) -> str:
+        return self._coerce_text(self._get_state().get("active_configuration_id"), "")
+
+    def _find_configuration_index(self, configurations: List[Dict[str, Any]], configuration_id: str) -> int:
+        for index, configuration in enumerate(configurations):
+            if configuration.get("id") == configuration_id:
+                return index
+        return -1
+
+    def _find_rule_index(self, rules: List[Dict[str, Any]], rule_id: str) -> int:
+        for index, rule in enumerate(rules):
+            if rule.get("id") == rule_id:
+                return index
+        return -1
+
+    def _get_active_configuration(self) -> Dict[str, Any]:
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        active_configuration_id = self._coerce_text(state.get("active_configuration_id"), "")
+
+        for configuration in configurations:
+            if configuration.get("id") == active_configuration_id:
+                return configuration
+
+        if configurations:
+            return configurations[0]
+
+        return self._create_empty_configuration(self._default_configuration_name(0))
+
+    def _update_configuration_field(self, configuration_id: str, field: str, value: Any):
+        if field not in ("name", "import_buffer"):
+            return
+
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        if field == "name":
+            normalized_value = self._coerce_text(value, "").strip() or self._default_configuration_name(configuration_index)
+            self.set_setting(self._configuration_name_input_key(configuration_id), normalized_value, reload_settings=False)
+            reload_settings = True
+        else:
+            normalized_value = self._coerce_text(value, "")
+            self.set_setting(self._configuration_import_input_key(configuration_id), normalized_value, reload_settings=False)
+            reload_settings = False
+
+        configurations[configuration_index][field] = normalized_value
+        self._save_state(state, reload_settings=reload_settings)
+
+    def _set_active_configuration(self, configuration_id: str, _view: Any = None):
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        if state.get("active_configuration_id") == configuration_id:
+            return
+
+        state["active_configuration_id"] = configuration_id
+        saved_state = self._save_state(state, reload_settings=True)
+        configuration_name = saved_state["configurations"][configuration_index].get("name", self._default_configuration_name(configuration_index))
+        BulletinHelper.show_success(f"Конфигурация '{configuration_name}' загружена.")
+
+    def _add_configuration(self, _view: Any = None):
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configurations.append(self._create_empty_configuration(self._default_configuration_name(len(configurations))))
+        self._save_state(state, reload_settings=True)
+        BulletinHelper.show_info("Конфигурация добавлена.")
+
+    def _delete_configuration(self, configuration_id: str, _view: Any = None):
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        if len(configurations) <= 1:
+            BulletinHelper.show_error("Нельзя удалить последнюю конфигурацию.")
+            return
+
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        removed_name = configurations[configuration_index].get("name", self._default_configuration_name(configuration_index))
+        configurations.pop(configuration_index)
+
+        if state.get("active_configuration_id") == configuration_id:
+            next_index = min(configuration_index, len(configurations) - 1)
+            state["active_configuration_id"] = configurations[next_index]["id"]
+
+        self._save_state(state, reload_settings=True)
+        BulletinHelper.show_info(f"Конфигурация '{removed_name}' удалена.")
+
+    def _create_empty_rule(self) -> Dict[str, Any]:
+        return {
+            "id": self._generate_id("rule"),
+            "match": "",
+            "replace": "",
+            "enabled": True,
+        }
+
+    def _update_rule_field(self, configuration_id: str, rule_id: str, field: str, value: Any):
+        if field not in ("match", "replace", "enabled"):
+            return
+
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        rules = configurations[configuration_index].get("rules", [])
+        rule_index = self._find_rule_index(rules, rule_id)
+        if rule_index < 0:
+            return
+
+        if field == "enabled":
+            rules[rule_index][field] = self._coerce_bool(value, default=True)
+        else:
+            rules[rule_index][field] = self._coerce_text(value, "")
+
+        self._save_state(state, reload_settings=False)
+
+    def _add_rule(self, configuration_id: str, _view: Any = None):
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        configurations[configuration_index].setdefault("rules", []).append(self._create_empty_rule())
+        self._save_state(state, reload_settings=True)
+        BulletinHelper.show_info("Правило добавлено.")
+
+    def _delete_rule(self, configuration_id: str, rule_id: str, _view: Any = None):
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        rules = configurations[configuration_index].get("rules", [])
+        new_rules = [rule for rule in rules if rule.get("id") != rule_id]
+        if len(new_rules) == len(rules):
+            return
+
+        configurations[configuration_index]["rules"] = new_rules
+        self._save_state(state, reload_settings=True)
+        BulletinHelper.show_info("Правило удалено.")
+
+    def _copy_text_to_clipboard(
+        self,
+        label: str,
+        text: str,
+        success_message: str,
+        error_message: str,
+    ) -> bool:
+        fragment = get_last_fragment()
+        activity = fragment.getParentActivity() if fragment and hasattr(fragment, "getParentActivity") else None
+        if not activity:
+            BulletinHelper.show_error("Не удалось получить доступ к буферу обмена.")
+            return False
+
+        try:
+            clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE)
+            if clipboard is None or not hasattr(clipboard, "setPrimaryClip"):
+                raise RuntimeError("Clipboard service is unavailable")
+
+            clip = ClipData.newPlainText(label, text)
+            clipboard.setPrimaryClip(clip)
+            BulletinHelper.show_copied_to_clipboard(success_message)
+            return True
+        except Exception as error:
+            self._log_error("Failed to copy text to clipboard", error)
+            BulletinHelper.show_error(error_message)
+            return False
+
+    def _export_configuration(self, configuration_id: str, _view: Any = None):
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        configuration = configurations[configuration_index]
+        payload = {
+            "name": configuration.get("name", self._default_configuration_name(configuration_index)),
+            "rules": configuration.get("rules", []),
+        }
+        payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
+        configuration_name = payload["name"]
+
+        self._copy_text_to_clipboard(
+            f"ReplacingCharacters {configuration_name}",
+            payload_json,
+            f"Конфигурация '{configuration_name}' скопирована в буфер обмена.",
+            "Не удалось скопировать конфигурацию в буфер обмена.",
+        )
+
+    def _extract_import_items(self, payload: Any) -> Optional[List[Any]]:
+        if isinstance(payload, list):
+            return payload
+
+        if isinstance(payload, dict):
+            for key in ("rules", "items", "data"):
+                candidate = payload.get(key)
+                if isinstance(candidate, list):
+                    return candidate
+            if any(key in payload for key in RULE_CONTENT_KEYS):
+                return [payload]
+
+        return None
+
+    def _normalize_import_rules(self, payload: Any) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]], int]:
+        import_name = ""
+        if isinstance(payload, dict):
+            import_name = self._coerce_text(payload.get("name") or payload.get("title"), "").strip()
+
+        items = self._extract_import_items(payload)
+        if items is None:
+            return import_name, None, 0
+
+        normalized_rules: List[Dict[str, Any]] = []
+        skipped = 0
+
+        for item in items:
+            normalized = self._normalize_rule(item)
+            if not normalized:
+                skipped += 1
+                continue
+
+            normalized["id"] = self._generate_id("rule")
+            normalized_rules.append(normalized)
+
+        return import_name, normalized_rules, skipped
+
+    def _import_configuration(self, configuration_id: str, _view: Any = None):
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        configuration_index = self._find_configuration_index(configurations, configuration_id)
+        if configuration_index < 0:
+            return
+
+        configuration = configurations[configuration_index]
+        raw_json = self._coerce_text(configuration.get("import_buffer"), "")
+        if not raw_json.strip():
+            BulletinHelper.show_error("Поле JSON для импорта пустое.")
+            return
+
+        try:
+            payload = json.loads(raw_json)
+        except Exception as error:
+            self._log_error("Failed to import configuration JSON", error)
+            BulletinHelper.show_error("Некорректный JSON для импорта.")
+            return
+
+        imported_name, normalized_rules, skipped = self._normalize_import_rules(payload)
+        if normalized_rules is None:
+            BulletinHelper.show_error("Ожидался JSON-массив правил или объект с ключом 'rules'.")
+            return
+
+        if not normalized_rules and skipped > 0:
+            BulletinHelper.show_error("В JSON не найдено ни одного корректного правила.")
+            return
+
+        configuration["rules"] = normalized_rules
+        configuration["import_buffer"] = ""
+        if imported_name:
+            configuration["name"] = imported_name
+            self.set_setting(self._configuration_name_input_key(configuration_id), imported_name, reload_settings=False)
+
+        self.set_setting(self._configuration_import_input_key(configuration_id), "", reload_settings=False)
+
+        saved_state = self._save_state(state, reload_settings=True)
+        saved_configuration = saved_state["configurations"][configuration_index]
+        configuration_name = saved_configuration.get("name", self._default_configuration_name(configuration_index))
+
+        message = f"Конфигурация '{configuration_name}' импортирована. Правил: {len(normalized_rules)}."
+        if skipped:
+            message += f" Пропущено некорректных записей: {skipped}."
+        BulletinHelper.show_success(message)
+
+    def create_settings(self) -> List[Any]:
+        state = self._get_state()
+        configurations = state.get("configurations", [])
+        active_configuration_id = self._coerce_text(state.get("active_configuration_id"), "")
+        active_configuration = self._get_active_configuration()
+        active_name = self._coerce_text(active_configuration.get("name"), self._default_configuration_name(0))
+        settings: List[Any] = [
+            Header(text="Конфигурации"),
+            Text(
+                text="Добавить конфигурацию",
+                accent=True,
+                on_click=self._add_configuration,
+            ),
+        ]
+
+        if len(configurations) > 1:
+            for configuration_index, configuration in enumerate(configurations):
+                configuration_id = self._coerce_text(configuration.get("id"), "")
+                configuration_name = self._coerce_text(
+                    configuration.get("name"),
+                    self._default_configuration_name(configuration_index),
+                )
+                is_active = configuration_id == active_configuration_id
+
+                if is_active:
+                    settings.append(Text(text=f"{configuration_index + 1}. {configuration_name}", accent=True))
+                else:
+                    settings.append(
+                        Text(
+                            text=f"{configuration_index + 1}. {configuration_name}",
+                            on_click=lambda view, cid=configuration_id: self._set_active_configuration(cid),
+                        )
+                    )
+
+            settings.append(Divider())
+
+        settings.extend([
+            Header(text=f"Текущая конфигурация: {active_name}"),
+            Input(
+                key=self._configuration_name_input_key(active_configuration_id),
+                text="Название текущей конфигурации",
+                default=active_name,
+                subtext="В редакторе правил одновременно открыта только одна конфигурация.",
+                on_change=lambda value, cid=active_configuration_id: self._update_configuration_field(cid, "name", value),
+            ),
+        ])
+
+        if len(configurations) > 1:
+            settings.append(
+                Text(
+                    text="Удалить текущую конфигурацию",
+                    red=True,
+                    on_click=lambda view, cid=active_configuration_id: self._delete_configuration(cid),
+                )
+            )
+
+        settings.extend([
+            Divider(),
+            Header(text="Правила текущей конфигурации"),
+            Text(
+                text="Добавить правило",
+                accent=True,
+                on_click=lambda view, cid=active_configuration_id: self._add_rule(cid),
+            ),
+        ])
+
+        rules = active_configuration.get("rules", [])
+        if not rules:
+            settings.append(Text(text="В текущей конфигурации пока нет правил."))
+        else:
+            for rule_index, rule in enumerate(rules):
+                rule_id = self._coerce_text(rule.get("id"), "")
+                settings.extend([
+                    Divider(),
+                    Header(text=f"Правило #{rule_index + 1}"),
+                    Switch(
+                        key=f"rule_enabled_{active_configuration_id}_{rule_id}",
+                        text="Включено",
+                        default=bool(rule.get("enabled", True)),
+                        on_change=lambda enabled, cid=active_configuration_id, rid=rule_id: self._update_rule_field(cid, rid, "enabled", enabled),
+                    ),
+                    Input(
+                        key=f"rule_match_{active_configuration_id}_{rule_id}",
+                        text="Что заменить",
+                        default=self._coerce_text(rule.get("match"), ""),
+                        subtext="Точное текстовое совпадение. Правило работает только если заполнены оба поля.",
+                        on_change=lambda value, cid=active_configuration_id, rid=rule_id: self._update_rule_field(cid, rid, "match", value),
+                    ),
+                    Input(
+                        key=f"rule_replace_{active_configuration_id}_{rule_id}",
+                        text="На что заменить",
+                        default=self._coerce_text(rule.get("replace"), ""),
+                        subtext="Оставьте пустым, если хотите временно отключить правило без удаления.",
+                        on_change=lambda value, cid=active_configuration_id, rid=rule_id: self._update_rule_field(cid, rid, "replace", value),
+                    ),
+                    Text(
+                        text="Удалить правило",
+                        red=True,
+                        on_click=lambda view, cid=active_configuration_id, rid=rule_id: self._delete_rule(cid, rid),
+                    ),
+                ])
+
+        settings.extend([
+            Divider(),
+            Header(text="JSON текущей конфигурации"),
+            Text(
+                text="Экспортировать текущую конфигурацию",
+                on_click=lambda view, cid=active_configuration_id: self._export_configuration(cid),
+            ),
+            Input(
+                key=self._configuration_import_input_key(active_configuration_id),
+                text="JSON для полной замены текущей конфигурации",
+                default=self._coerce_text(active_configuration.get("import_buffer"), ""),
+                subtext="Поддерживаются JSON-массив правил и объекты вида {name, rules}.",
+                on_change=lambda value, cid=active_configuration_id: self._update_configuration_field(cid, "import_buffer", value),
+            ),
+            Text(
+                text="Импортировать JSON в текущую конфигурацию",
+                accent=True,
+                on_click=lambda view, cid=active_configuration_id: self._import_configuration(cid),
+            ),
+        ])
+
+        return settings
+
+    def _build_runtime_rules(self) -> Dict[str, List[Tuple[str, str]]]:
+        active_configuration = self._get_active_configuration()
+        ordered_rules = []
+
+        for order, rule in enumerate(active_configuration.get("rules", [])):
+            if not self._coerce_bool(rule.get("enabled"), default=True):
+                continue
+
+            match_text = self._coerce_text(rule.get("match"), "")
+            replace_text = self._coerce_text(rule.get("replace"), "")
+            if match_text == "" or replace_text == "":
+                continue
+
+            ordered_rules.append((match_text, replace_text, order))
+
+        ordered_rules.sort(key=lambda item: (-len(item[0]), item[2]))
+
+        rules_by_first_char: Dict[str, List[Tuple[str, str]]] = {}
+        for match_text, replace_text, _order in ordered_rules:
+            rules_by_first_char.setdefault(match_text[0], []).append((match_text, replace_text))
+
+        return rules_by_first_char
+
+    def _apply_replacements(self, message: str) -> str:
+        rules_by_first_char = self._build_runtime_rules()
+        if not rules_by_first_char:
+            return message
+
+        result_parts: List[str] = []
+        index = 0
+        message_length = len(message)
+
+        while index < message_length:
+            candidates = rules_by_first_char.get(message[index])
+            matched = False
+
+            if candidates:
+                for match_text, replace_text in candidates:
+                    if message.startswith(match_text, index):
+                        result_parts.append(replace_text)
+                        index += len(match_text)
+                        matched = True
+                        break
+
+            if matched:
+                continue
+
+            result_parts.append(message[index])
+            index += 1
+
+        return "".join(result_parts)
+
+    def on_send_message_hook(self, account: int, params: Any) -> HookResult:
+        try:
+            if params is None or not hasattr(params, "message"):
+                return HookResult()
+
+            original_message = getattr(params, "message", None)
+            if original_message is None:
+                return HookResult()
+
+            if not isinstance(original_message, str):
+                original_message = str(original_message)
+
+            if not original_message:
+                return HookResult()
+
+            modified_message = self._apply_replacements(original_message)
+            if not isinstance(modified_message, str) or not modified_message or modified_message == original_message:
+                return HookResult()
+
+            params.message = modified_message
+            return HookResult(strategy=HookStrategy.MODIFY, params=params)
+        except Exception as error:
+            self._log_error("Failed to apply text replacements", error)
+            return HookResult()
